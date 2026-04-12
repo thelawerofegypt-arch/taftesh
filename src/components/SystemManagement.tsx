@@ -36,6 +36,26 @@ export default function SystemManagement() {
     reader.readAsText(file);
   };
 
+  const handleClearData = async () => {
+    if (!window.confirm('هل أنت متأكد من مسح كافة البيانات؟ لا يمكن التراجع عن هذه العملية.')) {
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/system/clear-data', { method: 'POST' });
+      if (res.ok) {
+        alert('تم مسح كافة البيانات بنجاح');
+        window.location.reload();
+      } else {
+        const data = await res.json();
+        alert(`خطأ: ${data.error}`);
+      }
+    } catch (err) {
+      console.error('Clear data error:', err);
+      alert('حدث خطأ أثناء مسح البيانات');
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8">
@@ -102,7 +122,10 @@ export default function SystemManagement() {
               <h4 className="font-bold text-slate-800">مسح كافة البيانات</h4>
               <p className="text-sm text-slate-500">سيتم حذف جميع الملفات والواردات من النظام بشكل نهائي.</p>
             </div>
-            <button className="px-6 py-2 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 transition-all flex items-center gap-2">
+            <button 
+              onClick={handleClearData}
+              className="px-6 py-2 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 transition-all flex items-center gap-2"
+            >
               <Trash2 className="w-4 h-4" /> مسح البيانات
             </button>
           </div>

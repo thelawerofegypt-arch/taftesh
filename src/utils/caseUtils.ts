@@ -4,6 +4,12 @@ import { STATUS_TRANSLATIONS, STAGE_TRANSLATIONS } from '../constants';
 export const getDescriptiveStatus = (c: Case): string => {
   if (c.case_status_v2) {
     let status = c.case_status_v2;
+    
+    // Special handling for finished inspection to make it very clear
+    if (c.case_status_v2 === 'منتهي فحص') {
+      status = 'فحص منتهي';
+    }
+
     if (c.case_status_detail) {
       status += ` - ${c.case_status_detail}`;
       

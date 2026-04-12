@@ -73,7 +73,6 @@ db.exec(`
     trial_year TEXT,
     current_stage TEXT DEFAULT 'incoming',
     examiner_id INTEGER,
-    examiner_result TEXT,
     examiner_decision TEXT,
     reopen_reason TEXT,
     reopened_by TEXT,
@@ -94,21 +93,22 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS inspections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     case_id INTEGER UNIQUE,
-    inspection_number TEXT UNIQUE,
-    year TEXT,
+    inspection_number TEXT NOT NULL,
+    year TEXT NOT NULL,
     referral_date TEXT,
     inspector_id INTEGER,
     result TEXT,
     details JSON,
     is_closed INTEGER DEFAULT 0,
     FOREIGN KEY(case_id) REFERENCES cases(id),
-    FOREIGN KEY(inspector_id) REFERENCES prosecution_members(id)
+    FOREIGN KEY(inspector_id) REFERENCES prosecution_members(id),
+    UNIQUE(inspection_number, year)
   );
 
   CREATE TABLE IF NOT EXISTS investigations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     case_id INTEGER UNIQUE,
-    investigation_number TEXT UNIQUE,
+    investigation_number TEXT,
     year TEXT,
     type TEXT,
     subject TEXT,
@@ -118,7 +118,27 @@ db.exec(`
     result TEXT,
     is_closed INTEGER DEFAULT 0,
     FOREIGN KEY(case_id) REFERENCES cases(id),
-    FOREIGN KEY(investigator_id) REFERENCES prosecution_members(id)
+    FOREIGN KEY(investigator_id) REFERENCES prosecution_members(id),
+    UNIQUE(investigation_number, year)
+  );
+
+  CREATE TABLE IF NOT EXISTS objections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    case_id INTEGER,
+    member_id INTEGER,
+    objection_number TEXT,
+    year TEXT,
+    incoming_number TEXT,
+    incoming_date TEXT,
+    committee_1_id INTEGER,
+    committee_2_id INTEGER,
+    committee_3_id INTEGER,
+    result TEXT,
+    verdict TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(case_id) REFERENCES cases(id),
+    FOREIGN KEY(member_id) REFERENCES prosecution_members(id),
+    UNIQUE(objection_number, year)
   );
 
   CREATE TABLE IF NOT EXISTS disciplinary_councils (
@@ -177,7 +197,6 @@ db.exec(`
 
 // Add missing columns if they don't exist
 try { db.exec("ALTER TABLE cases ADD COLUMN examiner_id INTEGER;"); } catch(e) {}
-try { db.exec("ALTER TABLE cases ADD COLUMN examiner_result TEXT;"); } catch(e) {}
 try { db.exec("ALTER TABLE cases ADD COLUMN examiner_decision TEXT;"); } catch(e) {}
 try { db.exec("ALTER TABLE cases ADD COLUMN reopen_reason TEXT;"); } catch(e) {}
 try { db.exec("ALTER TABLE cases ADD COLUMN reopened_by TEXT;"); } catch(e) {}
@@ -292,6 +311,25 @@ async function startServer() {
   });
 
   // Prosecution Members API
+  app.post("/api/system/clear-data", (req, res) => {
+    try {
+      const transaction = db.transaction(() => {
+        db.prepare("DELETE FROM case_members").run();
+        db.prepare("DELETE FROM inspections").run();
+        db.prepare("DELETE FROM investigations").run();
+        db.prepare("DELETE FROM objections").run();
+        db.prepare("DELETE FROM disciplinary_councils").run();
+        db.prepare("DELETE FROM audit_logs").run();
+        db.prepare("DELETE FROM reports_tracking").run();
+        db.prepare("DELETE FROM cases").run();
+      });
+      transaction();
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/prosecution-members", (req, res) => {
     const { search, page = 1, limit = 50 } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
@@ -686,7 +724,7 @@ async function startServer() {
       incoming_number, incoming_date, complainant, complainant_id_number, 
       subject, title, case_number, case_year, prosecution_id, prosecution_name,
       analysis_number, category, complaint_category, decision, status, member_id,
-      member_ids, examiner_id, examiner_result, examiner_decision,
+      member_ids, examiner_id, examiner_decision,
       case_status_v2, case_status_detail, trial_number, trial_year,
       inspection_data
     } = req.body;
@@ -702,15 +740,15 @@ async function startServer() {
           incoming_number, incoming_date, complainant, complainant_id_number, 
           subject, title, case_number, case_year, prosecution_id, prosecution_name,
           analysis_number, category, complaint_category, decision, status,
-          examiner_id, examiner_result, examiner_decision,
+          examiner_id, examiner_decision,
           case_status_v2, case_status_detail, trial_number, trial_year
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         incoming_number, incoming_date, complainant, complainant_id_number, 
         subject, title, case_number, case_year, sanitized_prosecution_id, prosecution_name,
         analysis_number, category, complaint_category, decision, status || 'draft',
-        sanitized_examiner_id, examiner_result, examiner_decision,
+        sanitized_examiner_id, examiner_decision,
         case_status_v2, case_status_detail, trial_number, trial_year
       );
       
@@ -758,6 +796,60 @@ async function startServer() {
         "System", "CREATE", "cases", caseId, JSON.stringify(req.body)
       );
 
+      // Sync reports and objections
+      syncReports(db);
+
+      // Extract and save objections to enforce uniqueness
+      if (inspection_data && inspection_data.members) {
+        const objectionYears: Record<string, number> = {};
+        inspection_data.members.forEach((m: any) => {
+          if (m.has_objection && m.objection_number) {
+            const objYear = m.objection_year || inspection_data.year;
+            
+            // Check if objection already exists for this member/case
+            const existing = db.prepare("SELECT objection_number FROM objections WHERE case_id = ? AND member_id = ?").get(caseId, m.member_id);
+            if (existing) {
+              if (existing.objection_number !== m.objection_number) {
+                throw new Error("لا يجوز تعديل رقم الاعتراض بعد تسجيله");
+              }
+            } else {
+              // Validate sequence for new objection
+              if (!objectionYears[objYear]) {
+                const row = db.prepare("SELECT MAX(CAST(objection_number AS INTEGER)) as max_num FROM objections WHERE year = ?").get(objYear);
+                objectionYears[objYear] = (row?.max_num || 0) + 1;
+              }
+              
+              if (parseInt(m.objection_number) !== objectionYears[objYear]) {
+                throw new Error(`رقم الاعتراض ${m.objection_number} غير صحيح. الرقم التالي المتاح لسنة ${objYear} هو ${objectionYears[objYear]}`);
+              }
+              objectionYears[objYear]++;
+            }
+
+            try {
+              db.prepare(`
+                INSERT INTO objections (case_id, member_id, objection_number, year, incoming_number, incoming_date, result, verdict)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(objection_number, year) DO UPDATE SET
+                  case_id = excluded.case_id,
+                  member_id = excluded.member_id,
+                  incoming_number = excluded.incoming_number,
+                  incoming_date = excluded.incoming_date,
+                  result = excluded.result,
+                  verdict = excluded.verdict
+              `).run(
+                caseId, m.member_id, m.objection_number, objYear,
+                m.objection_incoming_number, m.objection_date, m.objection_result, m.objection_verdict
+              );
+            } catch (e: any) {
+              if (e.message.includes("UNIQUE constraint failed: objections.objection_number")) {
+                throw new Error(`رقم الاعتراض ${m.objection_number} مسجل مسبقاً في النظام لسنة ${objYear}`);
+              }
+              throw e;
+            }
+          }
+        });
+      }
+
       return caseId;
     });
 
@@ -782,7 +874,7 @@ async function startServer() {
       'incoming_number', 'incoming_date', 'complainant', 'complainant_id_number',
       'subject', 'case_number', 'case_year', 'prosecution_id', 'prosecution_name',
       'analysis_number', 'category', 'complaint_category', 'decision', 'title',
-      'status', 'current_stage', 'examiner_id', 'examiner_result', 'examiner_decision',
+      'status', 'current_stage', 'examiner_id', 'examiner_decision',
       'reopen_reason', 'reopened_by', 'case_status_v2', 'case_status_detail',
       'trial_number', 'trial_year'
     ];
@@ -891,6 +983,58 @@ async function startServer() {
       db.prepare("INSERT INTO audit_logs (user_name, action, table_name, record_id, old_values, new_values) VALUES (?, ?, ?, ?, ?, ?)").run(
         "System", "UPDATE", "cases", id, JSON.stringify(oldData), JSON.stringify(req.body)
       );
+      syncReports(db);
+
+      // Extract and save objections to enforce uniqueness
+      if (inspection_data && inspection_data.members) {
+        const objectionYears: Record<string, number> = {};
+        inspection_data.members.forEach((m: any) => {
+          if (m.has_objection && m.objection_number) {
+            const objYear = m.objection_year || inspection_data.year;
+
+            // Check if objection already exists for this member/case
+            const existing = db.prepare("SELECT objection_number FROM objections WHERE case_id = ? AND member_id = ?").get(id, m.member_id);
+            if (existing) {
+              if (existing.objection_number !== m.objection_number) {
+                throw new Error("لا يجوز تعديل رقم الاعتراض بعد تسجيله");
+              }
+            } else {
+              // Validate sequence for new objection
+              if (!objectionYears[objYear]) {
+                const row = db.prepare("SELECT MAX(CAST(objection_number AS INTEGER)) as max_num FROM objections WHERE year = ?").get(objYear);
+                objectionYears[objYear] = (row?.max_num || 0) + 1;
+              }
+              
+              if (parseInt(m.objection_number) !== objectionYears[objYear]) {
+                throw new Error(`رقم الاعتراض ${m.objection_number} غير صحيح. الرقم التالي المتاح لسنة ${objYear} هو ${objectionYears[objYear]}`);
+              }
+              objectionYears[objYear]++;
+            }
+
+            try {
+              db.prepare(`
+                INSERT INTO objections (case_id, member_id, objection_number, year, incoming_number, incoming_date, result, verdict)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(objection_number, year) DO UPDATE SET
+                  case_id = excluded.case_id,
+                  member_id = excluded.member_id,
+                  incoming_number = excluded.incoming_number,
+                  incoming_date = excluded.incoming_date,
+                  result = excluded.result,
+                  verdict = excluded.verdict
+              `).run(
+                id, m.member_id, m.objection_number, objYear,
+                m.objection_incoming_number, m.objection_date, m.objection_result, m.objection_verdict
+              );
+            } catch (e: any) {
+              if (e.message.includes("UNIQUE constraint failed: objections.objection_number")) {
+                throw new Error(`رقم الاعتراض ${m.objection_number} مسجل مسبقاً في النظام لسنة ${objYear}`);
+              }
+              throw e;
+            }
+          }
+        });
+      }
     });
 
     try {
@@ -924,37 +1068,54 @@ async function startServer() {
           VALUES (?, ?, ?, ?, ?, ?, ?)
         `).run(case_id, inspection_number, year, referral_date, sanitized_inspector_id, result, JSON.stringify(details || {}));
         
-        // Real-time tracking update
-        const finishedResults = ['حفظ', 'ملحوظة كتابية', 'ملحوظة شفوية', 'إحالة تحقيق', 'ضم'];
+        const finishedResults = ['حفظ', 'ملحوظة', 'إحالة', 'ضم'];
         const isFinished = finishedResults.some(r => result?.includes(r));
-        if (result !== 'ضم إلى فحص') {
-          const inspector = db.prepare("SELECT name FROM prosecution_members WHERE id = ?").get(sanitized_inspector_id);
-          if (inspector) {
-            db.prepare(`
-              INSERT OR REPLACE INTO reports_tracking (
-                task_type, record_number, record_year, member_name, member_role, 
-                assignment_date, task_status, source_id
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(
-              'فحص', inspection_number, year, inspector.name, 'فاحص',
-              referral_date, isFinished ? 'منتهي' : 'متداول', info.lastInsertRowid
-            );
-          }
-        }
 
         if (isFinished) {
-          if (result?.includes('إحالة تحقيق')) {
-            db.prepare("UPDATE cases SET status = 'investigation', current_stage = 'investigation' WHERE id = ?").run(case_id);
+          if (result?.includes('إحالة')) {
+            db.prepare("UPDATE cases SET status = 'investigation', current_stage = 'investigation', case_status_v2 = 'متداول تحقيق', case_status_detail = 'قيد التحقيق' WHERE id = ?").run(case_id);
           } else {
-            db.prepare("UPDATE cases SET status = 'finished', current_stage = 'inspection' WHERE id = ?").run(case_id);
+            db.prepare("UPDATE cases SET status = 'finished', current_stage = 'inspection', case_status_v2 = 'منتهي فحص', case_status_detail = ? WHERE id = ?").run(result, case_id);
           }
         } else {
-          db.prepare("UPDATE cases SET status = 'inspection', current_stage = 'inspection' WHERE id = ?").run(case_id);
+          db.prepare("UPDATE cases SET status = 'inspection', current_stage = 'inspection', case_status_v2 = 'متداول فحص', case_status_detail = 'قيد الفحص' WHERE id = ?").run(case_id);
         }
         
         db.prepare("INSERT INTO audit_logs (user_name, action, table_name, record_id, new_values) VALUES (?, ?, ?, ?, ?)").run(
           "System", "CREATE", "inspections", case_id, JSON.stringify(req.body)
         );
+        
+        syncReports(db);
+
+        // Extract and save objections from details
+        if (details && details.members) {
+          details.members.forEach((m: any) => {
+            if (m.has_objection && m.objection_number) {
+              try {
+                db.prepare(`
+                  INSERT INTO objections (case_id, member_id, objection_number, year, incoming_number, incoming_date, result, verdict)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                  ON CONFLICT(objection_number) DO UPDATE SET
+                    case_id = excluded.case_id,
+                    member_id = excluded.member_id,
+                    year = excluded.year,
+                    incoming_number = excluded.incoming_number,
+                    incoming_date = excluded.incoming_date,
+                    result = excluded.result,
+                    verdict = excluded.verdict
+                `).run(
+                  case_id, m.member_id, m.objection_number, m.objection_year || year,
+                  m.objection_incoming_number, m.objection_date, m.objection_result, m.objection_verdict
+                );
+              } catch (e: any) {
+                if (e.message.includes("UNIQUE constraint failed: objections.objection_number")) {
+                  throw new Error(`رقم الاعتراض ${m.objection_number} مسجل مسبقاً في النظام`);
+                }
+                throw e;
+              }
+            }
+          });
+        }
         
         return info.lastInsertRowid;
       });
@@ -981,57 +1142,54 @@ async function startServer() {
       params.push(id);
       db.prepare(`UPDATE inspections SET ${updates.join(", ")} WHERE id = ?`).run(...params);
       
-      // Update tracking
-      const insp = db.prepare("SELECT i.*, m.name FROM inspections i JOIN prosecution_members m ON i.inspector_id = m.id WHERE i.id = ?").get(id);
-      if (insp && insp.result !== 'ضم إلى فحص') {
-        const finishedResults = ['حفظ', 'ملحوظة كتابية', 'ملحوظة شفوية', 'إحالة تحقيق', 'ضم'];
+      // Update case status if finished via inspection result
+      const insp = db.prepare("SELECT * FROM inspections WHERE id = ?").get(id);
+      if (insp) {
+        const finishedResults = ['حفظ', 'ملحوظة', 'إحالة', 'ضم'];
         const isFinished = finishedResults.some(r => insp.result?.includes(r));
-        db.prepare(`
-          UPDATE reports_tracking SET task_status = ?, completion_date = ? 
-          WHERE record_number = ? AND record_year = ? AND task_type = 'فحص'
-        `).run(isFinished ? 'منتهي' : 'متداول', isFinished ? new Date().toISOString().split('T')[0] : null, insp.inspection_number, insp.year);
-
-        // Update case status if finished
         if (isFinished) {
-          if (insp.result?.includes('إحالة تحقيق')) {
-            db.prepare("UPDATE cases SET status = 'investigation', current_stage = 'investigation' WHERE id = ?").run(insp.case_id);
+          if (insp.result?.includes('إحالة')) {
+            db.prepare("UPDATE cases SET status = 'investigation', current_stage = 'investigation', case_status_v2 = 'متداول تحقيق', case_status_detail = 'قيد التحقيق' WHERE id = ?").run(insp.case_id);
           } else {
-            db.prepare("UPDATE cases SET status = 'finished', current_stage = 'inspection' WHERE id = ?").run(insp.case_id);
+            db.prepare("UPDATE cases SET status = 'finished', current_stage = 'inspection', case_status_v2 = 'منتهي فحص', case_status_detail = ? WHERE id = ?").run(insp.result, insp.case_id);
           }
+        } else {
+          db.prepare("UPDATE cases SET status = 'inspection', current_stage = 'inspection', case_status_v2 = 'متداول فحص', case_status_detail = 'قيد الفحص' WHERE id = ?").run(insp.case_id);
         }
+      }
+      
+      syncReports(db);
 
-        // Update internal objections tracking
-        if (insp.details) {
-          try {
-            const details = JSON.parse(insp.details);
-            const members = details.members || [];
-            for (const member of members) {
-              if (member.has_objection && member.objection_number) {
-                const committee = [
-                  { id: member.objection_committee_1, role: 'عضو1' },
-                  { id: member.objection_committee_2, role: 'عضو2' },
-                  { id: member.objection_committee_3, role: 'عضو3' }
-                ];
-                for (const cMember of committee) {
-                  if (cMember.id) {
-                    const mInfo = db.prepare("SELECT name FROM prosecution_members WHERE id = ?").get(cMember.id);
-                    if (mInfo) {
-                      db.prepare(`
-                        INSERT OR REPLACE INTO reports_tracking (
-                          task_type, record_number, record_year, member_name, member_role, 
-                          task_status, source_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                      `).run(
-                        'اعتراض', member.objection_number, member.objection_year || insp.year, mInfo.name, cMember.role,
-                        member.objection_result ? 'منتهي' : 'متداول',
-                        insp.id
-                      );
-                    }
-                  }
+      // Extract and save objections from details if provided
+      if (details && details.members) {
+        const insp = db.prepare("SELECT * FROM inspections WHERE id = ?").get(id);
+        if (insp) {
+          details.members.forEach((m: any) => {
+            if (m.has_objection && m.objection_number) {
+              try {
+                db.prepare(`
+                  INSERT INTO objections (case_id, member_id, objection_number, year, incoming_number, incoming_date, result, verdict)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                  ON CONFLICT(objection_number) DO UPDATE SET
+                    case_id = excluded.case_id,
+                    member_id = excluded.member_id,
+                    year = excluded.year,
+                    incoming_number = excluded.incoming_number,
+                    incoming_date = excluded.incoming_date,
+                    result = excluded.result,
+                    verdict = excluded.verdict
+                `).run(
+                  insp.case_id, m.member_id, m.objection_number, m.objection_year || insp.year,
+                  m.objection_incoming_number, m.objection_date, m.objection_result, m.objection_verdict
+                );
+              } catch (e: any) {
+                if (e.message.includes("UNIQUE constraint failed: objections.objection_number")) {
+                  throw new Error(`رقم الاعتراض ${m.objection_number} مسجل مسبقاً في النظام`);
                 }
+                throw e;
               }
             }
-          } catch (e) {}
+          });
         }
       }
     }
@@ -1040,44 +1198,112 @@ async function startServer() {
   });
 
   // Investigations API
+  app.get("/api/investigations/next-number", (req, res) => {
+    const year = req.query.year || new Date().getFullYear().toString();
+    try {
+      const row = db.prepare("SELECT MAX(CAST(investigation_number AS INTEGER)) as max_num FROM investigations WHERE year = ?").get(year);
+      const nextNum = (row?.max_num || 0) + 1;
+      res.json({ nextNumber: nextNum.toString() });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/objections/next-number", (req, res) => {
+    const year = req.query.year || new Date().getFullYear().toString();
+    try {
+      const row = db.prepare("SELECT MAX(CAST(objection_number AS INTEGER)) as max_num FROM objections WHERE year = ?").get(year);
+      const nextNum = (row?.max_num || 0) + 1;
+      res.json({ nextNumber: nextNum.toString() });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post("/api/investigations", (req, res) => {
     const { case_id, investigation_number, year, type, subject, investigator_id, referral_authority, referral_details } = req.body;
     try {
       const transaction = db.transaction(() => {
+        // Validate investigation number sequence
+        const row = db.prepare("SELECT MAX(CAST(investigation_number AS INTEGER)) as max_num FROM investigations WHERE year = ?").get(year);
+        const nextNum = (row?.max_num || 0) + 1;
+        if (parseInt(investigation_number) !== nextNum) {
+          throw new Error(`رقم التحقيق غير صحيح أو تم تخطي أرقام. الرقم التالي المتاح لسنة ${year} هو ${nextNum}`);
+        }
+
         const info = db.prepare(`
           INSERT INTO investigations (case_id, investigation_number, year, type, subject, investigator_id, referral_authority, referral_details)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `).run(case_id, investigation_number, year, type, subject, investigator_id, referral_authority, JSON.stringify(referral_details || {}));
         
-        // Real-time tracking update
-        const investigator = db.prepare("SELECT name FROM prosecution_members WHERE id = ?").get(investigator_id);
-        if (investigator) {
-          db.prepare(`
-            INSERT OR REPLACE INTO reports_tracking (
-              task_type, record_number, record_year, member_name, member_role, 
-              task_status, source_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-          `).run(
-            'تحقيق', investigation_number, year, investigator.name, 'محقق',
-            'متداول', info.lastInsertRowid
-          );
-        }
-
-        const finishedResults = ['حفظ', 'ملحوظة', 'تنبيه', 'مجلس تأديب', 'ضم'];
+        const finishedResults = ['حفظ', 'ملحوظة', 'تنبيه', 'مجلس تأديب', 'ضم', 'منتهي تحقيق'];
         const isFinished = finishedResults.some(r => req.body.result?.includes(r));
         if (isFinished) {
           if (req.body.result?.includes('مجلس تأديب')) {
-            db.prepare("UPDATE cases SET status = 'council', current_stage = 'council' WHERE id = ?").run(case_id);
+            db.prepare("UPDATE cases SET status = 'council', current_stage = 'council', case_status_v2 = 'متداول محاكمة', case_status_detail = 'قيد المحاكمة' WHERE id = ?").run(case_id);
           } else {
-            db.prepare("UPDATE cases SET status = 'finished', current_stage = 'investigation' WHERE id = ?").run(case_id);
+            db.prepare("UPDATE cases SET status = 'finished', current_stage = 'investigation', case_status_v2 = 'منتهي تحقيق', case_status_detail = ? WHERE id = ?").run(req.body.result, case_id);
           }
         } else {
-          db.prepare("UPDATE cases SET status = 'investigation', current_stage = 'investigation' WHERE id = ?").run(case_id);
+          db.prepare("UPDATE cases SET status = 'investigation', current_stage = 'investigation', case_status_v2 = 'متداول تحقيق', case_status_detail = 'قيد التحقيق' WHERE id = ?").run(case_id);
         }
         
         db.prepare("INSERT INTO audit_logs (user_name, action, table_name, record_id, new_values) VALUES (?, ?, ?, ?, ?)").run(
           "System", "CREATE", "investigations", case_id, JSON.stringify(req.body)
         );
+        
+        syncReports(db);
+
+        // Extract and save objections from referral_details
+        if (referral_details && referral_details.members) {
+          const objectionYears: Record<string, number> = {};
+          referral_details.members.forEach((m: any) => {
+            if (m.has_objection && m.objection_number) {
+              const objYear = m.objection_year || year;
+
+              // Check if objection already exists for this member/case
+              const existing = db.prepare("SELECT objection_number FROM objections WHERE case_id = ? AND member_id = ?").get(case_id, m.member_id);
+              if (existing) {
+                if (existing.objection_number !== m.objection_number) {
+                  throw new Error("لا يجوز تعديل رقم الاعتراض بعد تسجيله");
+                }
+              } else {
+                // Validate sequence for new objection
+                if (!objectionYears[objYear]) {
+                  const row = db.prepare("SELECT MAX(CAST(objection_number AS INTEGER)) as max_num FROM objections WHERE year = ?").get(objYear);
+                  objectionYears[objYear] = (row?.max_num || 0) + 1;
+                }
+                
+                if (parseInt(m.objection_number) !== objectionYears[objYear]) {
+                  throw new Error(`رقم الاعتراض ${m.objection_number} غير صحيح. الرقم التالي المتاح لسنة ${objYear} هو ${objectionYears[objYear]}`);
+                }
+                objectionYears[objYear]++;
+              }
+
+              try {
+                db.prepare(`
+                  INSERT INTO objections (case_id, member_id, objection_number, year, incoming_number, incoming_date, result, verdict)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                  ON CONFLICT(objection_number, year) DO UPDATE SET
+                    case_id = excluded.case_id,
+                    member_id = excluded.member_id,
+                    incoming_number = excluded.incoming_number,
+                    incoming_date = excluded.incoming_date,
+                    result = excluded.result,
+                    verdict = excluded.verdict
+                `).run(
+                  case_id, m.member_id, m.objection_number, objYear,
+                  m.objection_incoming_number, m.objection_date, m.objection_result, m.objection_verdict
+                );
+              } catch (e: any) {
+                if (e.message.includes("UNIQUE constraint failed: objections.objection_number")) {
+                  throw new Error(`رقم الاعتراض ${m.objection_number} مسجل مسبقاً في النظام لسنة ${objYear}`);
+                }
+                throw e;
+              }
+            }
+          });
+        }
         
         return info.lastInsertRowid;
       });
@@ -1090,7 +1316,7 @@ async function startServer() {
   });
 
   app.patch("/api/investigations/:id", (req, res) => {
-    const { is_closed, result, referral_details } = req.body;
+    const { is_closed, result, referral_details, investigation_number, year } = req.body;
     const id = req.params.id;
     
     const updates: string[] = [];
@@ -1100,66 +1326,98 @@ async function startServer() {
     if (result !== undefined) { updates.push("result = ?"); params.push(result); }
     if (referral_details !== undefined) { updates.push("referral_details = ?"); params.push(JSON.stringify(referral_details)); }
 
-    if (updates.length > 0) {
-      params.push(id);
-      db.prepare(`UPDATE investigations SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+    const transaction = db.transaction(() => {
+      const existing = db.prepare("SELECT * FROM investigations WHERE id = ?").get(id);
+      if (!existing) throw new Error("التحقيق غير موجود");
 
-      // Update tracking
-      const inv = db.prepare("SELECT inv.*, m.name FROM investigations inv JOIN prosecution_members m ON inv.investigator_id = m.id WHERE inv.id = ?").get(id);
-      if (inv) {
-        const finishedResults = ['حفظ', 'ملحوظة', 'تنبيه', 'مجلس تأديب', 'ضم'];
-        const isFinished = finishedResults.some(r => inv.result?.includes(r));
-        db.prepare(`
-          UPDATE reports_tracking SET task_status = ?, completion_date = ? 
-          WHERE record_number = ? AND record_year = ? AND task_type = 'تحقيق'
-        `).run(isFinished ? 'منتهي' : 'متداول', isFinished ? new Date().toISOString().split('T')[0] : null, inv.investigation_number, inv.year);
+      if (investigation_number !== undefined && existing.investigation_number && existing.investigation_number !== investigation_number) {
+        throw new Error("لا يجوز تعديل رقم التحقيق بعد تسجيله");
+      }
+      if (year !== undefined && existing.year && existing.year !== year) {
+        throw new Error("لا يجوز تعديل سنة التحقيق بعد تسجيلها");
+      }
 
-        // Update case status if finished
-        if (isFinished) {
-          if (inv.result?.includes('مجلس تأديب')) {
-            db.prepare("UPDATE cases SET status = 'council', current_stage = 'council' WHERE id = ?").run(inv.case_id);
+      if (updates.length > 0) {
+        params.push(id);
+        db.prepare(`UPDATE investigations SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+
+        // Update case status if finished via investigation result
+        const inv = db.prepare("SELECT * FROM investigations WHERE id = ?").get(id);
+        if (inv) {
+          const finishedResults = ['حفظ', 'ملحوظة', 'تنبيه', 'مجلس تأديب', 'ضم', 'منتهي تحقيق'];
+          const isFinished = finishedResults.some(r => inv.result?.includes(r));
+          if (isFinished) {
+            if (inv.result?.includes('مجلس تأديب')) {
+              db.prepare("UPDATE cases SET status = 'council', current_stage = 'council', case_status_v2 = 'متداول محاكمة', case_status_detail = 'قيد المحاكمة' WHERE id = ?").run(inv.case_id);
+            } else {
+              db.prepare("UPDATE cases SET status = 'finished', current_stage = 'investigation', case_status_v2 = 'منتهي تحقيق', case_status_detail = ? WHERE id = ?").run(inv.result, inv.case_id);
+            }
           } else {
-            db.prepare("UPDATE cases SET status = 'finished', current_stage = 'investigation' WHERE id = ?").run(inv.case_id);
+            db.prepare("UPDATE cases SET status = 'investigation', current_stage = 'investigation', case_status_v2 = 'متداول تحقيق', case_status_detail = 'قيد التحقيق' WHERE id = ?").run(inv.case_id);
           }
         }
 
-        // Update internal objections tracking
-        if (inv.referral_details) {
-          try {
-            const refDetails = JSON.parse(inv.referral_details);
-            const members = refDetails.members || [];
-            for (const member of members) {
-              if (member.has_objection && member.objection_number) {
-                const committee = [
-                  { id: member.objection_committee_1, role: 'عضو1' },
-                  { id: member.objection_committee_2, role: 'عضو2' },
-                  { id: member.objection_committee_3, role: 'عضو3' }
-                ];
-                for (const cMember of committee) {
-                  if (cMember.id) {
-                    const mInfo = db.prepare("SELECT name FROM prosecution_members WHERE id = ?").get(cMember.id);
-                    if (mInfo) {
-                      db.prepare(`
-                        INSERT OR REPLACE INTO reports_tracking (
-                          task_type, record_number, record_year, member_name, member_role, 
-                          task_status, source_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                      `).run(
-                        'اعتراض', member.objection_number, member.objection_year || inv.year, mInfo.name, cMember.role,
-                        member.objection_result ? 'منتهي' : 'متداول',
-                        inv.id
-                      );
-                    }
-                  }
+        syncReports(db);
+
+        // Extract and save objections from referral_details if provided
+        if (referral_details && referral_details.members) {
+          const objectionYears: Record<string, number> = {};
+          referral_details.members.forEach((m: any) => {
+            if (m.has_objection && m.objection_number) {
+              const objYear = m.objection_year || existing.year;
+
+              // Check if objection already exists for this member/case
+              const existingObj = db.prepare("SELECT objection_number FROM objections WHERE case_id = ? AND member_id = ?").get(existing.case_id, m.member_id);
+              if (existingObj) {
+                if (existingObj.objection_number !== m.objection_number) {
+                  throw new Error("لا يجوز تعديل رقم الاعتراض بعد تسجيله");
                 }
+              } else {
+                // Validate sequence for new objection
+                if (!objectionYears[objYear]) {
+                  const row = db.prepare("SELECT MAX(CAST(objection_number AS INTEGER)) as max_num FROM objections WHERE year = ?").get(objYear);
+                  objectionYears[objYear] = (row?.max_num || 0) + 1;
+                }
+                
+                if (parseInt(m.objection_number) !== objectionYears[objYear]) {
+                  throw new Error(`رقم الاعتراض ${m.objection_number} غير صحيح. الرقم التالي المتاح لسنة ${objYear} هو ${objectionYears[objYear]}`);
+                }
+                objectionYears[objYear]++;
+              }
+
+              try {
+                db.prepare(`
+                  INSERT INTO objections (case_id, member_id, objection_number, year, incoming_number, incoming_date, result, verdict)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                  ON CONFLICT(objection_number, year) DO UPDATE SET
+                    case_id = excluded.case_id,
+                    member_id = excluded.member_id,
+                    incoming_number = excluded.incoming_number,
+                    incoming_date = excluded.incoming_date,
+                    result = excluded.result,
+                    verdict = excluded.verdict
+                `).run(
+                  existing.case_id, m.member_id, m.objection_number, objYear,
+                  m.objection_incoming_number, m.objection_date, m.objection_result, m.objection_verdict
+                );
+              } catch (e: any) {
+                if (e.message.includes("UNIQUE constraint failed: objections.objection_number")) {
+                  throw new Error(`رقم الاعتراض ${m.objection_number} مسجل مسبقاً في النظام لسنة ${objYear}`);
+                }
+                throw e;
               }
             }
-          } catch (e) {}
+          });
         }
       }
-    }
+    });
 
-    res.json({ success: true });
+    try {
+      transaction();
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(400).json({ error: e.message });
+    }
   });
 
   // Disciplinary Councils API
@@ -1210,155 +1468,37 @@ async function startServer() {
   // Reports and Statistics API
   app.post("/api/reports/sync", (req, res) => {
     try {
-      const transaction = db.transaction(() => {
-        // Clear existing tracking (optional, but ensures fresh start as requested)
-        db.prepare("DELETE FROM reports_tracking").run();
-
-        // 1. Sync Inspections (Immediate/Section)
-        const inspections = db.prepare(`
-          SELECT i.*, m.name as member_name, c.incoming_date
-          FROM inspections i
-          JOIN prosecution_members m ON i.inspector_id = m.id
-          JOIN cases c ON i.case_id = c.id
-          WHERE i.result NOT LIKE '%ضم إلى فحص%' OR i.result IS NULL
-        `).all();
-
-        // 1.5 Sync "فحص وعرض" tasks from cases
-        const examinerTasks = db.prepare(`
-          SELECT c.id, c.incoming_number, 'وارد' as record_year, m.name as member_name, c.incoming_date, c.status
-          FROM cases c
-          JOIN prosecution_members m ON c.examiner_id = m.id
-          WHERE c.decision = 'فحص وعرض'
-        `).all();
-
-        const finishedInspectionResults = ['حفظ', 'ملحوظة كتابية', 'ملحوظة شفوية', 'إحالة تحقيق', 'ضم'];
-        
-        for (const insp of inspections) {
-          const isFinished = finishedInspectionResults.some(r => insp.result?.includes(r));
-          db.prepare(`
-            INSERT OR IGNORE INTO reports_tracking (
-              task_type, record_number, record_year, member_name, member_role, 
-              assignment_date, task_status, source_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(
-            'فحص', insp.inspection_number, insp.year, insp.member_name, 'فاحص',
-            insp.referral_date || insp.incoming_date,
-            isFinished ? 'منتهي' : 'متداول',
-            insp.id
-          );
-
-          // Sync internal objections from inspection details
-          if (insp.details) {
-            try {
-              const details = JSON.parse(insp.details);
-              const members = details.members || [];
-              for (const member of members) {
-                if (member.has_objection && member.objection_number) {
-                  const committee = [
-                    { id: member.objection_committee_1, role: 'عضو1' },
-                    { id: member.objection_committee_2, role: 'عضو2' },
-                    { id: member.objection_committee_3, role: 'عضو3' }
-                  ];
-                  for (const cMember of committee) {
-                    if (cMember.id) {
-                      const mInfo = db.prepare("SELECT name FROM prosecution_members WHERE id = ?").get(cMember.id);
-                      if (mInfo) {
-                        db.prepare(`
-                          INSERT OR IGNORE INTO reports_tracking (
-                            task_type, record_number, record_year, member_name, member_role, 
-                            task_status, source_id
-                          ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                        `).run(
-                          'اعتراض', member.objection_number, member.objection_year || insp.year, mInfo.name, cMember.role,
-                          member.objection_result ? 'منتهي' : 'متداول',
-                          insp.id
-                        );
-                      }
-                    }
-                  }
-                }
-              }
-            } catch (e) {}
-          }
-        }
-
-        for (const task of examinerTasks) {
-          db.prepare(`
-            INSERT OR IGNORE INTO reports_tracking (
-              task_type, record_number, record_year, member_name, member_role, 
-              assignment_date, task_status, source_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(
-            'فحص', task.incoming_number, task.record_year, task.member_name, 'فاحص',
-            task.incoming_date,
-            task.status === 'finished' ? 'منتهي' : 'متداول',
-            task.id
-          );
-        }
-
-        // 2. Sync Investigations & Internal Objections
-        const investigations = db.prepare(`
-          SELECT inv.*, m.name as member_name, c.incoming_date
-          FROM investigations inv
-          JOIN prosecution_members m ON inv.investigator_id = m.id
-          JOIN cases c ON inv.case_id = c.id
-          WHERE inv.result NOT LIKE '%ضم إلى تحقيق%' OR inv.result IS NULL
-        `).all();
-
-        const finishedInvestigationResults = ['حفظ', 'ملحوظة', 'تنبيه', 'مجلس تأديب', 'ضم'];
-
-        for (const inv of investigations) {
-          const isFinished = finishedInvestigationResults.some(r => inv.result?.includes(r));
-          db.prepare(`
-            INSERT OR IGNORE INTO reports_tracking (
-              task_type, record_number, record_year, member_name, member_role, 
-              assignment_date, task_status, source_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(
-            'تحقيق', inv.investigation_number, inv.year, inv.member_name, 'محقق',
-            inv.incoming_date,
-            isFinished ? 'منتهي' : 'متداول',
-            inv.id
-          );
-
-          // Sync internal objections from investigation referral_details
-          if (inv.referral_details) {
-            try {
-              const refDetails = JSON.parse(inv.referral_details);
-              const members = refDetails.members || [];
-              for (const member of members) {
-                if (member.has_objection && member.objection_number) {
-                  const committee = [
-                    { id: member.objection_committee_1, role: 'عضو1' },
-                    { id: member.objection_committee_2, role: 'عضو2' },
-                    { id: member.objection_committee_3, role: 'عضو3' }
-                  ];
-                  for (const cMember of committee) {
-                    if (cMember.id) {
-                      const mInfo = db.prepare("SELECT name FROM prosecution_members WHERE id = ?").get(cMember.id);
-                      if (mInfo) {
-                        db.prepare(`
-                          INSERT OR IGNORE INTO reports_tracking (
-                            task_type, record_number, record_year, member_name, member_role, 
-                            task_status, source_id
-                          ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                        `).run(
-                          'اعتراض', member.objection_number, member.objection_year || inv.year, mInfo.name, cMember.role,
-                          member.objection_result ? 'منتهي' : 'متداول',
-                          inv.id
-                        );
-                      }
-                    }
-                  }
-                }
-              }
-            } catch (e) {}
-          }
-        }
-      });
-
-      transaction();
+      syncReports(db);
       res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/reports/summary", (req, res) => {
+    try {
+      const statusCounts = db.prepare(`
+        SELECT 
+          CASE 
+            WHEN status = 'finished' AND case_status_v2 = 'منتهي فحص' THEN 'inspection_finished'
+            WHEN status = 'finished' AND case_status_v2 = 'منتهي تحقيق' THEN 'investigation_finished'
+            WHEN status = 'finished' AND case_status_v2 = 'منتهي محاكمة' THEN 'finished'
+            ELSE status 
+          END as status, 
+          COUNT(*) as count 
+        FROM cases 
+        GROUP BY 1
+      `).all();
+      const inspectionResults = db.prepare("SELECT case_status_detail as result, COUNT(*) as count FROM cases WHERE case_status_v2 = 'منتهي فحص' GROUP BY case_status_detail").all();
+      const investigationResults = db.prepare("SELECT case_status_detail as result, COUNT(*) as count FROM cases WHERE case_status_v2 = 'منتهي تحقيق' GROUP BY case_status_detail").all();
+      const councilResults = db.prepare("SELECT case_status_detail as result, COUNT(*) as count FROM cases WHERE case_status_v2 = 'منتهي محاكمة' GROUP BY case_status_detail").all();
+      
+      res.json({
+        statusCounts,
+        inspectionResults,
+        investigationResults,
+        councilResults
+      });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -1421,6 +1561,200 @@ async function startServer() {
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
+}
+
+function syncReports(db: any) {
+  const transaction = db.transaction(() => {
+    // Clear existing tracking
+    db.prepare("DELETE FROM reports_tracking").run();
+
+    // 1. Sync Inspections (Immediate/Section)
+    const inspections = db.prepare(`
+      SELECT i.*, m.name as member_name, c.incoming_date, c.case_status_v2, c.status as case_status
+      FROM inspections i
+      JOIN prosecution_members m ON i.inspector_id = m.id
+      JOIN cases c ON i.case_id = c.id
+      WHERE i.result NOT LIKE '%ضم إلى فحص%' OR i.result IS NULL
+    `).all();
+
+    // 1.5 Sync "فحص وعرض" tasks from cases
+    const examinerTasks = db.prepare(`
+      SELECT c.id, c.incoming_number, 'وارد' as record_year, m.name as member_name, c.incoming_date, c.status, c.case_status_v2
+      FROM cases c
+      JOIN prosecution_members m ON c.examiner_id = m.id
+      WHERE c.decision = 'فحص وعرض'
+    `).all();
+
+    const finishedInspectionResults = ['حفظ', 'ملحوظة', 'إحالة', 'ضم', 'منتهي'];
+    
+    for (const insp of inspections) {
+      const isFinished = insp.case_status_v2?.includes('منتهي') || 
+                        insp.case_status === 'inspection_finished' ||
+                        insp.case_status === 'finished' ||
+                        finishedInspectionResults.some(r => insp.result?.includes(r));
+      db.prepare(`
+        INSERT OR IGNORE INTO reports_tracking (
+          task_type, record_number, record_year, member_name, member_role, 
+          assignment_date, task_status, source_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        'فحص', insp.inspection_number, insp.year, insp.member_name, 'فاحص',
+        insp.referral_date || insp.incoming_date,
+        isFinished ? 'منتهي' : 'متداول',
+        insp.id
+      );
+
+      // Sync internal objections from inspection details
+      if (insp.details) {
+        try {
+          const details = JSON.parse(insp.details);
+          const members = details.members || [];
+          for (const member of members) {
+            // Sync referral investigations
+            if (member.result === 'احالة الى التحقيق') {
+              const referrals = member.referral_investigations || [];
+              for (const ref of referrals) {
+                if (ref.number && ref.investigator_id) {
+                  const invInfo = db.prepare("SELECT name FROM prosecution_members WHERE id = ?").get(ref.investigator_id);
+                  if (invInfo) {
+                    const isFinished = insp.case_status_v2?.includes('منتهي') || 
+                                      insp.case_status === 'finished' ||
+                                      ['حفظ', 'ملحوظة', 'تنبيه', 'مجلس', 'ضم', 'منتهي'].some(r => ref.result?.includes(r));
+                    db.prepare(`
+                      INSERT OR IGNORE INTO reports_tracking (
+                        task_type, record_number, record_year, member_name, member_role, 
+                        task_status, source_id
+                      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    `).run(
+                      'تحقيق', ref.number, ref.year, invInfo.name, 'محقق',
+                      isFinished ? 'منتهي' : 'متداول',
+                      insp.id
+                    );
+                  }
+                }
+              }
+            }
+
+            if (member.has_objection && member.objection_number) {
+              const committee = [
+                { id: member.objection_committee_1, role: 'عضو1' },
+                { id: member.objection_committee_2, role: 'عضو2' },
+                { id: member.objection_committee_3, role: 'عضو3' }
+              ];
+              for (const cMember of committee) {
+                if (cMember.id) {
+                  const mInfo = db.prepare("SELECT name FROM prosecution_members WHERE id = ?").get(cMember.id);
+                  if (mInfo) {
+                    db.prepare(`
+                      INSERT OR IGNORE INTO reports_tracking (
+                        task_type, record_number, record_year, member_name, member_role, 
+                        task_status, source_id
+                      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    `).run(
+                      'اعتراض', member.objection_number, member.objection_year || insp.year, mInfo.name, cMember.role,
+                      member.objection_result ? 'منتهي' : 'متداول',
+                      insp.id
+                    );
+                  }
+                }
+              }
+            }
+          }
+        } catch (e) {}
+      }
+    }
+
+    for (const task of examinerTasks) {
+      const isFinished = task.status === 'finished' || 
+                        task.status === 'inspection_finished' || 
+                        task.status === 'investigation_finished' ||
+                        task.case_status_v2?.includes('منتهي');
+      db.prepare(`
+        INSERT OR IGNORE INTO reports_tracking (
+          task_type, record_number, record_year, member_name, member_role, 
+          assignment_date, task_status, source_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        'فحص', task.incoming_number, task.record_year, task.member_name, 'فاحص',
+        task.incoming_date,
+        isFinished ? 'منتهي' : 'متداول',
+        task.id
+      );
+    }
+
+    // 2. Sync Investigations & Internal Objections
+    const investigations = db.prepare(`
+      SELECT inv.*, m.name as member_name, c.incoming_date, c.case_status_v2, c.status as case_status
+      FROM investigations inv
+      JOIN prosecution_members m ON inv.investigator_id = m.id
+      JOIN cases c ON inv.case_id = c.id
+      WHERE inv.result NOT LIKE '%ضم إلى تحقيق%' OR inv.result IS NULL
+    `).all();
+
+    const finishedInvestigationResults = ['حفظ', 'ملحوظة', 'تنبيه', 'مجلس', 'ضم', 'منتهي'];
+
+    for (const inv of investigations) {
+      const isFinished = inv.case_status_v2?.includes('منتهي') || 
+                        inv.case_status === 'investigation_finished' ||
+                        inv.case_status === 'finished' ||
+                        finishedInvestigationResults.some(r => inv.result?.includes(r));
+      
+      let invReferralDate = inv.incoming_date;
+      if (inv.referral_details) {
+        try {
+          const details = JSON.parse(inv.referral_details);
+          if (details.referral_date) invReferralDate = details.referral_date;
+        } catch (e) {}
+      }
+
+      db.prepare(`
+        INSERT OR IGNORE INTO reports_tracking (
+          task_type, record_number, record_year, member_name, member_role, 
+          assignment_date, task_status, source_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        'تحقيق', inv.investigation_number, inv.year, inv.member_name, 'محقق',
+        invReferralDate,
+        isFinished ? 'منتهي' : 'متداول',
+        inv.id
+      );
+
+      // Sync internal objections from investigation referral_details
+      if (inv.referral_details) {
+        try {
+          const refDetails = JSON.parse(inv.referral_details);
+          const members = refDetails.members || [];
+          for (const member of members) {
+            if (member.has_objection && member.objection_number) {
+              const committee = [
+                { id: member.objection_committee_1, role: 'عضو1' },
+                { id: member.objection_committee_2, role: 'عضو2' },
+                { id: member.objection_committee_3, role: 'عضو3' }
+              ];
+              for (const cMember of committee) {
+                if (cMember.id) {
+                  const mInfo = db.prepare("SELECT name FROM prosecution_members WHERE id = ?").get(cMember.id);
+                  if (mInfo) {
+                    db.prepare(`
+                      INSERT OR IGNORE INTO reports_tracking (
+                        task_type, record_number, record_year, member_name, member_role, 
+                        task_status, source_id
+                      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    `).run(
+                      'اعتراض', member.objection_number, member.objection_year || inv.year, mInfo.name, cMember.role,
+                      member.objection_result ? 'منتهي' : 'متداول',
+                      inv.id
+                    );
+                  }
+                }
+              }
+            }
+          }
+        } catch (e) {}
+      }
+    }
+  });
+  transaction();
 }
 
 startServer();

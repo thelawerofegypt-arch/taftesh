@@ -35,7 +35,9 @@ export default function AdvancedSearch({ onCaseSelect }: AdvancedSearchProps) {
           c.incoming_number?.includes(filters.number) ||
           c.inspection?.inspection_number?.includes(filters.number) ||
           c.investigation?.investigation_number?.includes(filters.number) ||
-          c.trial_number?.includes(filters.number);
+          c.trial_number?.includes(filters.number) ||
+          c.inspection?.details?.members?.some((m: any) => m.objection_number?.includes(filters.number)) ||
+          c.investigation?.referral_details?.members?.some((m: any) => m.objection_number?.includes(filters.number));
 
         // Search by member name
         const matchMember = !filters.memberName || 
@@ -157,7 +159,7 @@ export default function AdvancedSearch({ onCaseSelect }: AdvancedSearchProps) {
             </select>
           </div>
 
-          {['منتهي فحص', 'منهى تحقيق', 'منتهى محاكمة'].includes(filters.statusV2) && (
+          {['منتهي فحص', 'منتهي تحقيق', 'منتهي محاكمة'].includes(filters.statusV2) && (
             <div className="space-y-2">
               <label className="block text-sm font-semibold text-slate-700 mr-1">تفاصيل الحالة</label>
               <select 
@@ -167,8 +169,8 @@ export default function AdvancedSearch({ onCaseSelect }: AdvancedSearchProps) {
               >
                 <option value="">الكل</option>
                 {filters.statusV2 === 'منتهي فحص' && FINISHED_INSPECTION_RESULTS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                {filters.statusV2 === 'منهى تحقيق' && FINISHED_INVESTIGATION_RESULTS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                {filters.statusV2 === 'منتهى محاكمة' && FINISHED_TRIAL_RESULTS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                {filters.statusV2 === 'منتهي تحقيق' && FINISHED_INVESTIGATION_RESULTS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                {filters.statusV2 === 'منتهي محاكمة' && FINISHED_TRIAL_RESULTS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
               </select>
             </div>
           )}

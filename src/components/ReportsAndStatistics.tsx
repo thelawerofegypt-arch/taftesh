@@ -52,6 +52,7 @@ export default function ReportsAndStatistics() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [detailSearchTerm, setDetailSearchTerm] = useState('');
   const [selectedMember, setSelectedMember] = useState<string | null>(null);
   const [memberDetails, setMemberDetails] = useState<MemberDetails | null>(null);
   const [activeDetailTab, setActiveDetailTab] = useState<'inspections' | 'investigations' | 'objections'>('inspections');
@@ -455,7 +456,7 @@ export default function ReportsAndStatistics() {
                 <CheckCircle2 className="w-5 h-5" /> تقرير نتائج التصرف في الفحص
               </h3>
               <div className="space-y-4">
-                {['حفظ', 'ملحوظة كتابية', 'ملحوظة شفوية', 'إحالة إلى التحقيق', 'ضم فحص آخر', 'ضم لتحقيق آخر'].map(result => {
+                {['حفظ', 'ملحوظة كتابية', 'ملحوظة شفوية', 'إحالة للتحقيق', 'ضم لفحص آخر', 'ضم لتحقيق آخر'].map(result => {
                   const count = summary?.inspectionResults?.find((r: any) => r.result === result)?.count || 0;
                   return (
                     <div key={result} className="flex items-center justify-between p-3 bg-emerald-50 rounded-xl">
@@ -491,7 +492,7 @@ export default function ReportsAndStatistics() {
                 <FileText className="w-5 h-5" /> تقرير أحكام مجلس التأديب
               </h3>
               <div className="space-y-4">
-                {['براءة', 'إنذار', 'لوم', 'عزل', 'رفض دعوى الصلاحية', 'قبول دعوى الصلاحية'].map(result => {
+                {['براءة', 'إنذار', 'لوم', 'عزل', 'رفض صلاحية', 'قبول صلاحية احالة للمعاش', 'قبول صلاحية واحالة وظيفة غير قضائية'].map(result => {
                   const count = summary?.councilResults?.find((r: any) => r.result === result)?.count || 0;
                   return (
                     <div key={result} className="flex items-center justify-between p-3 bg-red-50 rounded-xl">
@@ -654,26 +655,39 @@ export default function ReportsAndStatistics() {
             </div>
           </div>
 
-          {/* Detail Tabs */}
-          <div className="flex gap-2 p-1 bg-gray-100 rounded-2xl w-fit print:hidden">
-            <button 
-              onClick={() => setActiveDetailTab('inspections')}
-              className={`px-6 py-2.5 rounded-xl font-bold transition-all ${activeDetailTab === 'inspections' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-            >
-              كشف الفحوص
-            </button>
-            <button 
-              onClick={() => setActiveDetailTab('investigations')}
-              className={`px-6 py-2.5 rounded-xl font-bold transition-all ${activeDetailTab === 'investigations' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-            >
-              كشف التحقيقات
-            </button>
-            <button 
-              onClick={() => setActiveDetailTab('objections')}
-              className={`px-6 py-2.5 rounded-xl font-bold transition-all ${activeDetailTab === 'objections' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-            >
-              كشف الاعتراضات
-            </button>
+          {/* Detail Tabs & Search */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 print:hidden">
+            <div className="flex gap-2 p-1 bg-gray-100 rounded-2xl w-fit">
+              <button 
+                onClick={() => setActiveDetailTab('inspections')}
+                className={`px-6 py-2.5 rounded-xl font-bold transition-all ${activeDetailTab === 'inspections' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+              >
+                كشف الفحوص
+              </button>
+              <button 
+                onClick={() => setActiveDetailTab('investigations')}
+                className={`px-6 py-2.5 rounded-xl font-bold transition-all ${activeDetailTab === 'investigations' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+              >
+                كشف التحقيقات
+              </button>
+              <button 
+                onClick={() => setActiveDetailTab('objections')}
+                className={`px-6 py-2.5 rounded-xl font-bold transition-all ${activeDetailTab === 'objections' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+              >
+                كشف الاعتراضات
+              </button>
+            </div>
+
+            <div className="relative flex-1 max-w-xs group">
+              <Search className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 group-focus-within:text-indigo-600 transition-colors" />
+              <input 
+                type="text"
+                placeholder="بحث بالرقم أو التاريخ..."
+                value={detailSearchTerm}
+                onChange={(e) => setDetailSearchTerm(e.target.value)}
+                className="w-full pr-10 pl-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-sm"
+              />
+            </div>
           </div>
 
           {/* Detail Content */}
@@ -695,7 +709,9 @@ export default function ReportsAndStatistics() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {memberDetails?.inspections.map((t, i) => (
+                    {memberDetails?.inspections
+                      .filter(t => t.record_number.includes(detailSearchTerm) || t.assignment_date?.includes(detailSearchTerm))
+                      .map((t, i) => (
                       <tr key={t.id}>
                         <td className="px-6 py-4 text-sm text-gray-400">{i + 1}</td>
                         <td className="px-6 py-4 font-bold text-gray-900">{t.record_number}</td>
@@ -726,15 +742,19 @@ export default function ReportsAndStatistics() {
                       <th className="px-6 py-4 border-b">مسلسل</th>
                       <th className="px-6 py-4 border-b">رقم التحقيق</th>
                       <th className="px-6 py-4 border-b">سنة التحقيق</th>
+                      <th className="px-6 py-4 border-b">تاريخ الإحالة</th>
                       <th className="px-6 py-4 border-b">الحالة</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {memberDetails?.investigations.map((t, i) => (
+                    {memberDetails?.investigations
+                      .filter(t => t.record_number.includes(detailSearchTerm) || t.assignment_date?.includes(detailSearchTerm))
+                      .map((t, i) => (
                       <tr key={t.id}>
                         <td className="px-6 py-4 text-sm text-gray-400">{i + 1}</td>
                         <td className="px-6 py-4 font-bold text-gray-900">{t.record_number}</td>
                         <td className="px-6 py-4 text-gray-600">{t.record_year}</td>
+                        <td className="px-6 py-4 text-gray-500 text-sm">{t.assignment_date}</td>
                         <td className="px-6 py-4">
                           <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${t.task_status === 'منتهي' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>
                             {t.task_status === 'منتهي' ? <CheckCircle2 className="w-3 h-3" /> : <Clock className="w-3 h-3" />}

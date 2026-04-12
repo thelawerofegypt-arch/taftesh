@@ -47,6 +47,7 @@ export default function MemberManagement() {
   const [selectedMember, setSelectedMember] = useState<ProsecutionMember | null>(null);
   const [editingMember, setEditingMember] = useState<ProsecutionMember | null>(null);
   const [memberHistory, setMemberHistory] = useState<MemberHistoryItem[]>([]);
+  const [historySearchTerm, setHistorySearchTerm] = useState('');
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   
   // Import state
@@ -288,35 +289,35 @@ export default function MemberManagement() {
   const totalPages = Math.ceil(totalCount / 50);
 
   return (
-    <div className="space-y-10">
+    <div className="space-y-6">
       {/* Header & Search */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-8">
-        <div className="relative w-full md:w-[450px] group">
-          <Search className="absolute right-5 top-1/2 -translate-y-1/2 w-6 h-6 text-slate-400 group-focus-within:text-primary transition-colors" />
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="relative w-full md:w-96">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
           <input 
             type="text"
-            className="premium-input pr-14 py-4 text-base"
+            className="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-200 rounded-xl shadow-sm focus:ring-2 focus:ring-indigo-500 outline-none"
             placeholder="بحث بالاسم، الرقم القومي، الدرجة، أو النيابة..."
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(1); }}
           />
         </div>
-        <div className="flex flex-wrap gap-4">
+        <div className="flex flex-wrap gap-3">
           <button 
             onClick={() => setShowImportModal(true)}
-            className="premium-button-secondary border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+            className="flex items-center gap-2 px-4 py-2.5 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-xl font-bold hover:bg-emerald-100 transition-all"
           >
             <FileSpreadsheet className="w-5 h-5" /> مركز الاستيراد
           </button>
           <button 
             onClick={exportToExcel}
-            className="premium-button-secondary border-blue-200 text-blue-700 hover:bg-blue-50"
+            className="flex items-center gap-2 px-4 py-2.5 bg-blue-50 text-blue-700 border border-blue-100 rounded-xl font-bold hover:bg-blue-100 transition-all"
           >
             <Download className="w-5 h-5" /> تصدير Excel
           </button>
           <button 
             onClick={() => setShowAddModal(true)}
-            className="premium-button-primary"
+            className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 transition-all"
           >
             <UserPlus className="w-5 h-5" /> إضافة عضو جديد
           </button>
@@ -324,62 +325,62 @@ export default function MemberManagement() {
       </div>
 
       {/* Members Table */}
-      <div className="premium-card overflow-hidden">
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="premium-table">
-            <thead>
+          <table className="w-full text-right">
+            <thead className="bg-gray-50 border-b border-gray-100">
               <tr>
-                <th>م</th>
-                <th>الاسم</th>
-                <th>الدرجة</th>
-                <th>الأقدمية</th>
-                <th>النيابة</th>
-                <th>الرقم القومي</th>
-                <th>الإجراءات</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">م</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">الاسم</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">الدرجة</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">الأقدمية</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">النيابة</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">الرقم القومي</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">الإجراءات</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-gray-100">
               {isLoading ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-24 text-center">
-                    <Loader2 className="w-12 h-12 text-primary animate-spin mx-auto mb-4 shadow-2xl shadow-primary/20" />
-                    <p className="text-slate-500 font-bold">جاري استرجاع بيانات الأعضاء...</p>
+                  <td colSpan={7} className="px-6 py-12 text-center">
+                    <Loader2 className="w-8 h-8 text-indigo-600 animate-spin mx-auto" />
+                    <p className="mt-2 text-gray-500">جاري تحميل البيانات...</p>
                   </td>
                 </tr>
               ) : members.map((member, idx) => (
-                <tr key={member.id} className="hover:bg-slate-50/80 group">
-                  <td className="text-slate-400 font-mono">{(page - 1) * 50 + idx + 1}</td>
-                  <td>
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 bg-primary/10 text-primary rounded-xl flex items-center justify-center font-bold text-sm shadow-inner group-hover:scale-110 transition-transform">
+                <tr key={member.id} className="hover:bg-gray-50/50 transition-colors group">
+                  <td className="px-6 py-4 text-sm text-gray-400">{(page - 1) * 50 + idx + 1}</td>
+                  <td className="px-6 py-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center font-bold text-xs">
                         {member.name.charAt(0)}
                       </div>
-                      <span className="font-bold text-slate-900 group-hover:text-primary transition-colors">{member.name}</span>
+                      <span className="font-bold text-gray-900">{member.name}</span>
                     </div>
                   </td>
-                  <td className="text-slate-600 font-medium">{member.grade}</td>
-                  <td className="text-slate-600 font-bold">{member.seniority}</td>
-                  <td className="text-slate-600 font-medium">{member.prosecution_office}</td>
-                  <td className="text-slate-500 font-mono tracking-wider">{member.national_id}</td>
-                  <td>
-                    <div className="flex items-center gap-3">
+                  <td className="px-6 py-4 text-sm text-gray-600">{member.grade}</td>
+                  <td className="px-6 py-4 text-sm text-gray-600">{member.seniority}</td>
+                  <td className="px-6 py-4 text-sm text-gray-600">{member.prosecution_office}</td>
+                  <td className="px-6 py-4 text-sm font-mono text-gray-500">{member.national_id}</td>
+                  <td className="px-6 py-4">
+                    <div className="flex items-center gap-2">
                       <button 
                         onClick={() => handleEditClick(member)}
-                        className="p-2.5 text-blue-600 hover:bg-blue-50 rounded-xl transition-all active:scale-90"
+                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
                         title="تعديل البيانات"
                       >
                         <Pencil className="w-4 h-4" />
                       </button>
                       <button 
                         onClick={() => fetchMemberHistory(member)}
-                        className="p-2.5 text-primary hover:bg-primary/5 rounded-xl transition-all active:scale-90"
+                        className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
                         title="استعراض التاريخ المهني"
                       >
                         <Eye className="w-4 h-4" />
                       </button>
                       <button 
                         onClick={() => handleDelete(member.id)}
-                        className="p-2.5 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all active:scale-90"
+                        className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -389,12 +390,7 @@ export default function MemberManagement() {
               ))}
               {!isLoading && members.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-6 py-24 text-center">
-                    <div className="w-20 h-20 bg-slate-50 rounded-[2rem] flex items-center justify-center mx-auto mb-6">
-                      <Search className="w-10 h-10 text-slate-200" />
-                    </div>
-                    <p className="text-slate-500 font-bold text-lg">لا توجد نتائج مطابقة للبحث</p>
-                  </td>
+                  <td colSpan={7} className="px-6 py-12 text-center text-gray-400">لا توجد نتائج للبحث</td>
                 </tr>
               )}
             </tbody>
@@ -403,17 +399,17 @@ export default function MemberManagement() {
 
         {/* Pagination */}
         {totalPages > 1 && (
-          <div className="p-8 border-t border-slate-100 bg-slate-50/30 flex items-center justify-between">
-            <p className="text-sm text-slate-500 font-medium">عرض <span className="text-slate-900 font-bold">{(page - 1) * 50 + 1}</span> إلى <span className="text-slate-900 font-bold">{Math.min(page * 50, totalCount)}</span> من إجمالي <span className="text-slate-900 font-bold">{totalCount}</span> عضو</p>
-            <div className="flex items-center gap-3">
+          <div className="p-4 border-t border-gray-100 bg-gray-50 flex items-center justify-between">
+            <p className="text-sm text-gray-500">عرض {(page - 1) * 50 + 1} إلى {Math.min(page * 50, totalCount)} من إجمالي {totalCount} عضو</p>
+            <div className="flex items-center gap-2">
               <button 
                 disabled={page === 1}
                 onClick={() => setPage(p => p - 1)}
-                className="p-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed transition-all active:scale-90"
+                className="p-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ChevronRight className="w-5 h-5" />
               </button>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
                 {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
                   let pageNum = page;
                   if (page <= 3) pageNum = i + 1;
@@ -426,8 +422,8 @@ export default function MemberManagement() {
                     <button
                       key={pageNum}
                       onClick={() => setPage(pageNum)}
-                      className={`w-12 h-12 rounded-xl font-bold text-sm transition-all active:scale-90 ${
-                        page === pageNum ? 'bg-primary text-white shadow-xl shadow-primary/30' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                      className={`w-10 h-10 rounded-lg font-bold text-sm transition-all ${
+                        page === pageNum ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
                       }`}
                     >
                       {pageNum}
@@ -438,7 +434,7 @@ export default function MemberManagement() {
               <button 
                 disabled={page === totalPages}
                 onClick={() => setPage(p => p + 1)}
-                className="p-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed transition-all active:scale-90"
+                className="p-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ChevronLeft className="w-5 h-5" />
               </button>
@@ -694,8 +690,27 @@ export default function MemberManagement() {
                 </div>
               ) : (
                 <div className="space-y-6">
+                  <div className="relative group print:hidden">
+                    <Search className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 group-focus-within:text-indigo-600 transition-colors" />
+                    <input 
+                      type="text"
+                      placeholder="بحث برقم الوارد، الموضوع، أو التاريخ..."
+                      value={historySearchTerm}
+                      onChange={(e) => setHistorySearchTerm(e.target.value)}
+                      className="w-full pr-10 pl-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
+                    />
+                  </div>
+
                   <div className="grid grid-cols-1 gap-6">
-                    {memberHistory.map((item, idx) => (
+                    {memberHistory
+                      .filter(item => 
+                        item.incoming_number.includes(historySearchTerm) ||
+                        item.subject.includes(historySearchTerm) ||
+                        item.incoming_date.includes(historySearchTerm) ||
+                        (item.inspection_number && item.inspection_number.includes(historySearchTerm)) ||
+                        (item.investigation_number && item.investigation_number.includes(historySearchTerm))
+                      )
+                      .map((item, idx) => (
                       <div key={idx} className="bg-white border border-gray-100 rounded-2xl shadow-sm hover:shadow-md transition-all overflow-hidden group">
                         <div className="flex flex-col md:flex-row">
                           {/* Left Side: Case Info */}
@@ -741,7 +756,12 @@ export default function MemberManagement() {
                                 </div>
                                 <div className="bg-indigo-50/50 p-3 rounded-xl border border-indigo-100">
                                   <p className="text-xs font-bold text-indigo-900">رقم الفحص: {item.inspection_number} / {item.inspection_year}</p>
-                                  <p className="text-[11px] text-indigo-700 mt-1">النتيجة: {item.inspection_result || 'قيد الانتظار'}</p>
+                                  <div className="flex items-center gap-2 mt-1">
+                                    <p className="text-[11px] text-indigo-700">النتيجة: {item.inspection_result || 'قيد الانتظار'}</p>
+                                    {item.inspection_result && item.inspection_result !== 'قيد الفحص' && item.inspection_result !== 'قيد الانتظار' && (
+                                      <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded-md text-[9px] font-bold">منتهي</span>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
                             )}

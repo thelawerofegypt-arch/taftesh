@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { Save, Lock, Unlock, History, FileText, ArrowLeft, Plus, Trash2, ExternalLink, Search, AlertCircle, ChevronDown, Archive, UserPlus, Users, X, CheckCircle2, Clock } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import SearchableSelect from './SearchableSelect';
 import ProsecutionSearchableSelect from './ProsecutionSearchableSelect';
 import Timeline from './Timeline';
+import { getDescriptiveStatus } from '../utils/caseUtils';
 import { Case, Member } from '../types';
 import { CASE_STATUS_OPTIONS, FINISHED_INSPECTION_RESULTS, FINISHED_INVESTIGATION_RESULTS, FINISHED_TRIAL_RESULTS } from '../constants';
 
@@ -137,10 +138,11 @@ const ReferralInvestigationSection: React.FC<ReferralInvestigationSectionProps> 
     const count = parseInt(referralInvestigationCount || '0');
     const currentFields = investigationFields.length;
     if (count > currentFields) {
+      const newInvs = [];
       for (let i = currentFields; i < count; i++) {
-        appendInvestigation({ 
+        newInvs.push({ 
           number: '', 
-          year: '2025', 
+          year: new Date().getFullYear().toString(), 
           type: 'فني', 
           subject: '', 
           member_count: '0', 
@@ -148,6 +150,7 @@ const ReferralInvestigationSection: React.FC<ReferralInvestigationSectionProps> 
           investigator_id: 0
         });
       }
+      appendInvestigation(newInvs);
     } else if (count < currentFields) {
       for (let i = currentFields - 1; i >= count; i--) {
         removeInvestigation(i);
@@ -197,7 +200,7 @@ const ReferralInvestigationSection: React.FC<ReferralInvestigationSectionProps> 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="space-y-1">
                 <label className="block text-sm font-medium text-gray-700">رقم التحقيق</label>
-                <input {...register(`inspection_members.${memberIndex}.referral_investigations.${index}.number`)} disabled={!isEditing || isLocked('referral_investigations', memberIndex, 'number', index)} className="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none disabled:bg-gray-50" />
+                <input {...register(`inspection_members.${memberIndex}.referral_investigations.${index}.number`)} disabled className="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none bg-gray-50 text-gray-500" />
               </div>
               <div className="space-y-1">
                 <label className="block text-sm font-medium text-gray-700">سنة التحقيق</label>
@@ -438,7 +441,7 @@ const ReferralInvestigationSection: React.FC<ReferralInvestigationSectionProps> 
                               </div>
                               <div className="space-y-1">
                                 <label className="block text-sm font-medium text-gray-700">رقم الاعتراض</label>
-                                <input {...register(`inspection_members.${memberIndex}.referral_investigations.${index}.members.${mIndex}.objection_number`)} className="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none" />
+                                <input {...register(`inspection_members.${memberIndex}.referral_investigations.${index}.members.${mIndex}.objection_number`)} readOnly className="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none bg-gray-50 cursor-not-allowed text-gray-500" />
                               </div>
                             </div>
 
@@ -550,7 +553,7 @@ const ReferralInvestigationSection: React.FC<ReferralInvestigationSectionProps> 
                               </div>
                               <div className="space-y-1">
                                 <label className="block text-sm font-medium text-gray-700">رقم الاعتراض</label>
-                                <input {...register(`inspection_members.${memberIndex}.referral_investigations.${index}.members.${mIndex}.objection_number`)} className="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none" />
+                                <input {...register(`inspection_members.${memberIndex}.referral_investigations.${index}.members.${mIndex}.objection_number`)} readOnly className="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none bg-gray-50 cursor-not-allowed text-gray-500" />
                               </div>
                             </div>
 
@@ -649,7 +652,7 @@ const ReferralInvestigationSection: React.FC<ReferralInvestigationSectionProps> 
                               </div>
                               <div className="space-y-1">
                                 <label className="block text-sm font-medium text-gray-700">رقم الاعتراض</label>
-                                <input {...register(`inspection_members.${memberIndex}.referral_investigations.${index}.members.${mIndex}.warning_objection_number`)} className="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none" />
+                                <input {...register(`inspection_members.${memberIndex}.referral_investigations.${index}.members.${mIndex}.warning_objection_number`)} readOnly className="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none bg-gray-50 cursor-not-allowed text-gray-500" />
                               </div>
                               <div className="space-y-1">
                                 <label className="block text-sm font-medium text-gray-700">سنة الاعتراض</label>
@@ -949,7 +952,6 @@ interface CaseFormData {
   trial_number?: string;
   trial_year?: string;
   examiner_id?: number;
-  examiner_result?: string;
   examiner_decision?: string;
   inspection_member_count: string;
   inspection_number: string;
@@ -984,6 +986,8 @@ interface CaseFormData {
     referral_investigations?: ReferralInvestigation[];
   }[];
   investigator_id?: number;
+  investigation_number?: string;
+  investigation_year?: string;
   [key: string]: any;
 }
 
@@ -991,11 +995,13 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
   const [currentCase, setCurrentCase] = useState<Case | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isEditing, setIsEditing] = useState(!caseId);
+  const [showInvestigationForm, setShowInvestigationForm] = useState(false);
   const [activeStage, setActiveStage] = useState<'incoming' | 'inspection' | 'investigation' | 'council'>('incoming');
   const [prosecutions, setProsecutions] = useState<any[]>([]);
   const [showReopenModal, setShowReopenModal] = useState(false);
   const [reopenReason, setReopenReason] = useState('');
   const [pendingSaveData, setPendingSaveData] = useState<{data: any, isFinal: boolean} | null>(null);
+  const numberingInProgress = useRef<Set<string>>(new Set());
 
     const { register, handleSubmit, setValue, watch, reset, control, formState: { errors } } = useForm<CaseFormData>({
       defaultValues: {
@@ -1015,7 +1021,6 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
         prosecution_id: '',
         decision: '',
         examiner_id: 0,
-        examiner_result: '',
         examiner_decision: '',
         inspection_member_count: '0',
         inspection_number: '',
@@ -1023,7 +1028,11 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
         inspection_referral_date: new Date().toISOString().split('T')[0],
         inspector_id: 0,
         inspection_members: [{ member_id: 0, result: 'قيد الفحص' }],
-        referral_investigations: []
+        referral_investigations: [],
+        investigation_number: '',
+        investigation_year: new Date().getFullYear().toString(),
+        case_status_v2: '',
+        case_status_detail: ''
       }
     });
 
@@ -1033,20 +1042,20 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
     });
 
     const accusedMemberCount = watch('accused_member_count');
-    const caseStatusV2 = watch('case_status_v2');
-    const inspectionMembers = watch('inspection_members');
-    const caseStatusDetail = watch('case_status_detail');
-    const decision = watch('decision');
-    const inspectionMemberCount = watch('inspection_member_count');
-    const inspectionYear = watch('inspection_year');
-    const inspectionNumber = watch('inspection_number');
 
     const isLocked = (fieldName: string, index?: number, subField?: string, subIndex?: number, mIndex?: number) => {
       if (!caseId || !currentCase) return false;
       
+      // If the case is archived/closed, everything is locked
+      if (currentCase.status === 'closed') return true;
+
       // Inspection number and year are immutable once saved, regardless of case status
       if (fieldName === 'inspection_number' && !!currentCase.inspection?.inspection_number) return true;
       if (fieldName === 'inspection_year' && !!currentCase.inspection?.year) return true;
+
+      // Investigation number and year are immutable once saved
+      if (fieldName === 'investigation_number' && !!currentCase.investigation?.investigation_number) return true;
+      if (fieldName === 'investigation_year' && !!currentCase.investigation?.year) return true;
 
       // If the case is in draft or finished status, allow editing previously saved data
       if (currentCase.status === 'draft' || currentCase.status === 'finished') return false;
@@ -1064,6 +1073,10 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
           const members = currentCase.inspection?.details?.members || [];
           const member = members[index];
           if (!member) return false;
+          
+          // Objection number is immutable once set
+          if (subField === 'objection_number' && !!(member as any).objection_number) return true;
+
           const val = (member as any)[subField];
           return val !== undefined && val !== null && val !== '' && val !== 0 && val !== 'قيد الفحص';
         }
@@ -1074,9 +1087,16 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
           const inv = member.referral_investigations[subIndex];
           if (!inv) return false;
 
+          // Investigation number in referral is immutable once set
+          if (subField === 'number' && !!inv.number) return true;
+
           if (mIndex !== undefined) {
             const m = inv.members?.[mIndex];
             if (!m) return false;
+
+            // Objection number in investigation member is immutable once set
+            if (subField === 'objection_number' && !!(m as any).objection_number) return true;
+
             const val = (m as any)[subField];
             return val !== undefined && val !== null && val !== '' && val !== 0 && val !== 'قيد التحقيق';
           }
@@ -1091,6 +1111,9 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
       if (fieldName === 'inspection_year') return !!currentCase.inspection?.year;
       if (fieldName === 'inspection_referral_date') return !!currentCase.inspection?.referral_date;
       if (fieldName === 'inspector_id') return !!currentCase.inspection?.inspector_id;
+      
+      if (fieldName === 'investigation_number') return !!currentCase.investigation?.investigation_number;
+      if (fieldName === 'investigation_year') return !!currentCase.investigation?.year;
 
       const value = (currentCase as any)[fieldName];
       return value !== undefined && value !== null && value !== '' && value !== 0;
@@ -1109,25 +1132,6 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
         }
       }
     }, [accusedMemberCount, appendAccusedMember, removeAccusedMember, accusedMembersFields.length]);
-
-    // Auto-update case_status_detail based on actual results when status is 'منتهي فحص'
-    useEffect(() => {
-      if (caseStatusV2 === 'منتهي فحص') {
-        let actualResult = '';
-        if (decision === 'فحص') {
-          const results = inspectionMembers?.map((m: any) => m.result).filter((r: string) => r && r !== 'قيد الفحص') || [];
-          if (results.length > 0) {
-            actualResult = results[0];
-          }
-        } else if (decision === 'فحص وعرض') {
-          actualResult = watch('examiner_result');
-        }
-        
-        if (actualResult && actualResult !== watch('case_status_detail')) {
-          setValue('case_status_detail', actualResult);
-        }
-      }
-    }, [caseStatusV2, decision, inspectionMembers, watch('examiner_result'), setValue]);
 
     const [formError, setFormError] = useState<string | null>(null);
 
@@ -1172,33 +1176,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
           }
         }
 
-        // 3. Validation: Match case_status_v2 and case_status_detail with actual data
-        if (isFinal && data.case_status_v2 === 'منتهي فحص') {
-          let actualResult = '';
-          let sourceName = '';
-
-          if (data.decision === 'فحص') {
-            // Check inspection members results
-            const results = data.inspection_members?.map((m: any) => m.result).filter((r: string) => r && r !== 'قيد الفحص') || [];
-            if (results.length > 0) {
-              actualResult = results[0]; // Take the first one for simplicity, or we could check if they are all the same
-              sourceName = 'نتائج أعضاء الفحص';
-            }
-          } else if (data.decision === 'فحص وعرض') {
-            actualResult = data.examiner_result;
-            sourceName = 'رأي العضو الفاحص';
-          }
-
-          if (actualResult && data.case_status_detail && actualResult !== data.case_status_detail) {
-            const msg = `خطأ في مطابقة البيانات: ${sourceName} هو (${actualResult}) بينما حالة الوارد المختارة هي (${data.case_status_detail}). يرجى تصحيح حالة الوارد لتتطابق مع القرار الفعلي.`;
-            setFormError(msg);
-            window.alert(msg);
-            setIsLoading(false);
-            return;
-          }
-        }
-
-        // 4. Reopen Reason: If case is finished and saving as draft
+        // 3. Reopen Reason: If case is finished and saving as draft
         if (caseId && currentCase?.status === 'finished' && !isFinal) {
           if (!reopenReason || reopenReason.trim() === '') {
             setPendingSaveData({ data, isFinal });
@@ -1281,6 +1259,13 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
       if (errors.incoming_date) messages.push("تاريخ الوارد مطلوب");
       if (errors.subject) messages.push("موضوع الشكوى مطلوب");
       if (errors.member_id) messages.push("يجب اختيار العضو المشكو في حقه");
+      if (errors.case_status_v2) messages.push("حالة الوارد مطلوبة");
+      if (errors.case_status_detail) {
+        const status = watch('case_status_v2');
+        if (['منتهي فحص', 'منتهي تحقيق', 'منتهي محاكمة'].includes(status || '')) {
+          messages.push("تفاصيل الحالة مطلوبة");
+        }
+      }
       
       const fullMsg = messages.length > 0 
         ? `يرجى استكمال البيانات التالية:\n- ${messages.join('\n- ')}`
@@ -1303,6 +1288,11 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
       name: "inspection_members"
     });
 
+    const decision = watch('decision');
+    const inspectionMemberCount = watch('inspection_member_count');
+    const inspectionYear = watch('inspection_year');
+    const inspectionNumber = watch('inspection_number');
+
     useEffect(() => {
       // If it's already locked (saved in DB), don't touch it
       if (isLocked('inspection_number')) return;
@@ -1321,13 +1311,120 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
     }, [decision, inspectionYear, setValue]);
 
     useEffect(() => {
+      const timer = setTimeout(() => {
+        const allMembers = watch('inspection_members') || [];
+        
+        // 1. Handle Referral Investigations Numbers
+        const investigationsToNumber: { mIdx: number, invIdx: number, year: string, key: string }[] = [];
+        allMembers.forEach((member: any, mIdx: number) => {
+          const referrals = member.referral_investigations || [];
+          referrals.forEach((inv: any, invIdx: number) => {
+            const key = `inv-${mIdx}-${invIdx}`;
+            if (!inv.number && !isLocked('referral_investigations', mIdx, 'number', invIdx) && !numberingInProgress.current.has(key)) {
+              investigationsToNumber.push({ mIdx, invIdx, year: inv.year || new Date().getFullYear().toString(), key });
+            }
+          });
+        });
+
+        if (investigationsToNumber.length > 0) {
+          investigationsToNumber.forEach(item => numberingInProgress.current.add(item.key));
+          const year = investigationsToNumber[0].year;
+          fetch(`/api/investigations/next-number?year=${year}`)
+            .then(res => res.json())
+            .then(data => {
+              if (data.nextNumber) {
+                let nextNum = parseInt(data.nextNumber);
+                investigationsToNumber.forEach((item) => {
+                  setValue(`inspection_members.${item.mIdx}.referral_investigations.${item.invIdx}.number`, nextNum.toString());
+                  nextNum++;
+                });
+              }
+            })
+            .finally(() => {
+              investigationsToNumber.forEach(item => numberingInProgress.current.delete(item.key));
+            });
+        }
+
+        // 2. Handle Objection Numbers (Main and Referral)
+        const objectionsToNumber: { path: string, year: string, key: string }[] = [];
+        allMembers.forEach((member: any, mIdx: number) => {
+          // Main member objection
+          const mainKey = `obj-main-${mIdx}`;
+          if (member.has_objection && !member.objection_number && !isLocked('inspection_members', mIdx, 'objection_number') && !numberingInProgress.current.has(mainKey)) {
+            objectionsToNumber.push({ 
+              path: `inspection_members.${mIdx}.objection_number`, 
+              year: member.objection_year || new Date().getFullYear().toString(),
+              key: mainKey
+            });
+          } else if (!member.has_objection && member.objection_number && !isLocked('inspection_members', mIdx, 'objection_number')) {
+            setValue(`inspection_members.${mIdx}.objection_number`, '');
+          }
+
+          // Referral investigations objections
+          const referrals = member.referral_investigations || [];
+          referrals.forEach((inv: any, invIdx: number) => {
+            const invMembers = inv.members || [];
+            invMembers.forEach((invMember: any, memberIdx: number) => {
+              const refKey = `obj-ref-${mIdx}-${invIdx}-${memberIdx}`;
+              if (invMember.has_objection && !invMember.objection_number && !isLocked('referral_investigations', mIdx, 'objection_number', invIdx, memberIdx) && !numberingInProgress.current.has(refKey)) {
+                objectionsToNumber.push({ 
+                  path: `inspection_members.${mIdx}.referral_investigations.${invIdx}.members.${memberIdx}.objection_number`, 
+                  year: new Date().getFullYear().toString(),
+                  key: refKey
+                });
+              } else if (!invMember.has_objection && invMember.objection_number && !isLocked('referral_investigations', mIdx, 'objection_number', invIdx, memberIdx)) {
+                setValue(`inspection_members.${mIdx}.referral_investigations.${invIdx}.members.${memberIdx}.objection_number`, '');
+              }
+            });
+          });
+        });
+
+        if (objectionsToNumber.length > 0) {
+          objectionsToNumber.forEach(item => numberingInProgress.current.add(item.key));
+          const year = objectionsToNumber[0].year;
+          fetch(`/api/objections/next-number?year=${year}`)
+            .then(res => res.json())
+            .then(data => {
+              if (data.nextNumber) {
+                let nextNum = parseInt(data.nextNumber);
+                objectionsToNumber.forEach((item) => {
+                  setValue(item.path as any, nextNum.toString());
+                  nextNum++;
+                });
+              }
+            })
+            .finally(() => {
+              objectionsToNumber.forEach(item => numberingInProgress.current.delete(item.key));
+            });
+        }
+      }, 300); // 300ms debounce to allow all appends to finish
+      return () => clearTimeout(timer);
+    }, [watch('inspection_members'), setValue, isLocked]);
+
+    const investigationYear = watch('investigation_year');
+    useEffect(() => {
+      // Fetch next investigation number when stage is investigation and no investigation exists yet
+      if (currentCase?.current_stage === 'investigation' && !currentCase.investigation) {
+        fetch(`/api/investigations/next-number?year=${investigationYear || new Date().getFullYear().toString()}`)
+          .then(res => res.json())
+          .then(data => {
+            if (data.nextNumber) {
+              setValue('investigation_number', data.nextNumber);
+            }
+          });
+      }
+    }, [currentCase, investigationYear, setValue]);
+
+    useEffect(() => {
       const count = parseInt(inspectionMemberCount || '0');
       if (count > 0) {
         const currentFields = fields.length;
         if (count > currentFields) {
+          const newMembers = [];
           for (let i = currentFields; i < count; i++) {
-            append({ member_id: 0, result: 'قيد الفحص' });
+            newMembers.push({ member_id: 0, result: 'قيد الفحص' });
           }
+          append(newMembers);
         } else if (count < currentFields) {
           for (let i = currentFields - 1; i >= count; i--) {
             remove(i);
@@ -1463,7 +1560,11 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
       const res = await fetch('/api/investigations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...data, case_id: caseId }),
+        body: JSON.stringify({ 
+          ...data, 
+          year: data.investigation_year, // Map for backend
+          case_id: caseId 
+        }),
       });
       if (res.ok) window.location.reload();
     } catch (error) {
@@ -1618,7 +1719,11 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
       </AnimatePresence>
       {currentCase && (
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-          <Timeline currentStage={currentCase.current_stage} status={currentCase.status} />
+          <Timeline 
+            currentStage={currentCase.current_stage} 
+            status={currentCase.status} 
+            descriptiveStatus={getDescriptiveStatus(currentCase)}
+          />
         </div>
       )}
 
@@ -1636,80 +1741,23 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
           </div>
           <div className="flex items-center gap-2">
             {isEditing && (
-              <div className="flex items-center gap-4 flex-wrap justify-end">
-                <div className="flex items-center gap-3 flex-wrap">
-                  <div className="flex items-center gap-2 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-200 shadow-sm">
-                    <label className="text-sm font-bold text-indigo-700 whitespace-nowrap">حالة الوارد:</label>
-                    <select 
-                      {...register('case_status_v2')}
-                      disabled={!isEditing}
-                      className="bg-transparent text-sm font-bold text-indigo-900 outline-none cursor-pointer min-w-[120px]"
-                    >
-                      <option value="">اختر الحالة...</option>
-                      {CASE_STATUS_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                    </select>
-                  </div>
-
-                  {['منتهي فحص', 'منهى تحقيق', 'منتهى محاكمة'].includes(watch('case_status_v2') || '') && (
-                    <div className="flex items-center gap-2 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-200 shadow-sm">
-                      <label className="text-sm font-bold text-indigo-700 whitespace-nowrap">تفاصيل الحالة:</label>
-                      <select 
-                        {...register('case_status_detail')}
-                        disabled={!isEditing}
-                        className="bg-transparent text-sm font-bold text-indigo-900 outline-none cursor-pointer min-w-[120px]"
-                      >
-                        <option value="">اختر النتيجة...</option>
-                        {watch('case_status_v2') === 'منتهي فحص' && FINISHED_INSPECTION_RESULTS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                        {watch('case_status_v2') === 'منهى تحقيق' && FINISHED_INVESTIGATION_RESULTS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                        {watch('case_status_v2') === 'منتهى محاكمة' && FINISHED_TRIAL_RESULTS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                      </select>
-                    </div>
-                  )}
-
-                  {['قيد محاكمة', 'منتهى محاكمة'].includes(watch('case_status_v2') || '') && (
-                    <>
-                      <div className="flex items-center gap-2 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-200 shadow-sm">
-                        <label className="text-sm font-bold text-indigo-700 whitespace-nowrap">رقم الدعوى:</label>
-                        <input 
-                          {...register('trial_number')}
-                          disabled={!isEditing}
-                          className="bg-transparent text-sm font-bold text-indigo-900 outline-none w-20 border-b border-indigo-200 focus:border-indigo-500"
-                          placeholder="رقم..."
-                        />
-                      </div>
-                      <div className="flex items-center gap-2 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-200 shadow-sm">
-                        <label className="text-sm font-bold text-indigo-700 whitespace-nowrap">السنة:</label>
-                        <select 
-                          {...register('trial_year')}
-                          disabled={!isEditing}
-                          className="bg-transparent text-sm font-bold text-indigo-900 outline-none cursor-pointer"
-                        >
-                          <option value="">السنة...</option>
-                          {[2026, 2025, 2024, 2023, 2022].map(y => <option key={y} value={y}>{y}</option>)}
-                        </select>
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <button 
-                    type="button"
-                    onClick={() => caseId ? setIsEditing(false) : onSuccess()}
-                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
-                  >
-                    <X className="w-4 h-4" /> إلغاء
-                  </button>
-                  <button 
-                    type="button"
-                    onClick={() => handleSave(false)}
-                    disabled={isLoading}
-                    className="flex items-center gap-2 px-6 py-2 text-sm font-bold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-600/20 disabled:opacity-50"
-                  >
-                    {isLoading ? <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" /> : <CheckCircle2 className="w-4 h-4" />}
-                    حفظ واغلاق
-                  </button>
-                </div>
+              <div className="flex items-center gap-3">
+                <button 
+                  type="button"
+                  onClick={() => caseId ? setIsEditing(false) : onSuccess()}
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                >
+                  <X className="w-4 h-4" /> إلغاء
+                </button>
+                <button 
+                  type="button"
+                  onClick={() => handleSave(false)}
+                  disabled={isLoading}
+                  className="flex items-center gap-2 px-6 py-2 text-sm font-bold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-600/20 disabled:opacity-50"
+                >
+                  {isLoading ? <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" /> : <CheckCircle2 className="w-4 h-4" />}
+                  حفظ واغلاق
+                </button>
               </div>
             )}
           </div>
@@ -1871,10 +1919,6 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
               </select>
             </div>
 
-
-
-
-
             {decision === 'فحص وعرض' && (
               <div className="md:col-span-3 space-y-6 bg-blue-50/50 p-6 rounded-2xl border border-blue-100 mt-4">
                 <div className="flex items-center gap-3 mb-4">
@@ -1892,17 +1936,6 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
                       disabled={!isEditing || isLocked('examiner_id')}
                       onChange={(m) => setValue('examiner_id', m.id)} 
                     />
-                  </div>
-                  <div className="md:col-span-3">
-                    <label className="block text-sm font-medium text-gray-700">رأي العضو الفاحص</label>
-                    <select 
-                      {...register('examiner_result')}
-                      disabled={!isEditing || isLocked('examiner_result')}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none disabled:bg-gray-50"
-                    >
-                      <option value="">اختر الرأي...</option>
-                      {FINISHED_INSPECTION_RESULTS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                    </select>
                   </div>
                   <div className="md:col-span-3">
                     <label className="block text-sm font-medium text-gray-700">نص قرار الفاحص</label>
@@ -2106,7 +2139,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
                                   </div>
                                   <div className="space-y-1">
                                     <label className="block text-sm font-medium text-gray-700">رقم الاعتراض</label>
-                                    <input {...register(`inspection_members.${index}.objection_number`)} className="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none" />
+                                    <input {...register(`inspection_members.${index}.objection_number`)} readOnly className="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none bg-gray-50 cursor-not-allowed text-gray-500" />
                                   </div>
                                   <div className="space-y-1">
                                     <label className="block text-sm font-medium text-gray-700">سنة الاعتراض</label>
@@ -2226,7 +2259,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
                                   </div>
                                   <div className="space-y-1">
                                     <label className="block text-sm font-medium text-gray-700">رقم الاعتراض</label>
-                                    <input {...register(`inspection_members.${index}.objection_number`)} className="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none" />
+                                    <input {...register(`inspection_members.${index}.objection_number`)} readOnly className="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none bg-gray-50 cursor-not-allowed text-gray-500" />
                                   </div>
                                 </div>
 
@@ -2388,7 +2421,14 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
                   </div>
                   <div className="p-4 bg-gray-50 rounded-xl">
                     <p className="text-xs text-gray-400 mb-1">النتيجة</p>
-                    <p className="font-bold text-indigo-600">{currentCase.inspection.result}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-bold text-indigo-600">{currentCase.inspection.result}</p>
+                      {currentCase.inspection.result !== 'قيد الفحص' && (
+                        <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-bold flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3" /> فحص منتهي
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -2471,9 +2511,9 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
                   <div className="flex justify-end">
                     <button 
                       onClick={() => handleStageTransition('investigation', 'investigation')}
-                      className="px-8 py-3 bg-amber-600 text-white rounded-xl font-bold shadow-lg shadow-amber-600/20"
+                      className="px-8 py-3 bg-amber-600 text-white rounded-xl font-bold shadow-lg shadow-amber-600/20 flex items-center gap-2"
                     >
-                      فتح دورة التحقيق الآن
+                      <Plus className="w-5 h-5" /> إنشاء ملف تحقيق جديد
                     </button>
                   </div>
                 )}
@@ -2628,7 +2668,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
                   )}
                 </div>
               </div>
-            ) : (
+            ) : showInvestigationForm ? (
               <form className="grid grid-cols-1 md:grid-cols-2 gap-6" onSubmit={(e) => {
                 e.preventDefault();
                 const formData = new FormData(e.currentTarget);
@@ -2636,11 +2676,21 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
               }}>
                 <div className="space-y-1">
                   <label className="block text-sm font-medium text-gray-700">رقم التحقيق</label>
-                  <input name="investigation_number" required className="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none" />
+                  <input 
+                    {...register('investigation_number')} 
+                    readOnly 
+                    required 
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none bg-gray-50 cursor-not-allowed" 
+                  />
                 </div>
                 <div className="space-y-1">
                   <label className="block text-sm font-medium text-gray-700">سنة التحقيق</label>
-                  <input name="year" required className="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none" />
+                  <input 
+                    {...register('investigation_year')} 
+                    readOnly 
+                    required 
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none bg-gray-50 cursor-not-allowed" 
+                  />
                 </div>
                 <div className="md:col-span-2">
                   <SearchableSelect 
@@ -2648,7 +2698,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
                     value={watch('investigator_id')}
                     onChange={(m) => setValue('investigator_id', m.id)} 
                   />
-                  <input type="hidden" name="investigator_id" value={watch('investigator_id')} />
+                  <input type="hidden" {...register('investigator_id')} />
                 </div>
                 <div className="space-y-1">
                   <label className="block text-sm font-medium text-gray-700">سلطة الإحالة</label>
@@ -2661,10 +2711,28 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
                   <label className="block text-sm font-medium text-gray-700">نوع التحقيق</label>
                   <input name="type" required className="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none" placeholder="مثال: إداري / فني" />
                 </div>
-                <div className="md:col-span-2 flex justify-end">
+                <div className="md:col-span-2 flex justify-end gap-3">
+                  <button 
+                    type="button"
+                    onClick={() => setShowInvestigationForm(false)}
+                    className="px-6 py-2 text-gray-600 bg-gray-100 rounded-lg font-bold hover:bg-gray-200 transition-colors"
+                  >
+                    إلغاء
+                  </button>
                   <button type="submit" className="px-6 py-2 bg-amber-600 text-white rounded-lg font-bold shadow-lg shadow-amber-600/20">حفظ بيانات التحقيق</button>
                 </div>
               </form>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-12 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
+                <History className="w-12 h-12 text-gray-300 mb-4" />
+                <p className="text-gray-500 mb-6 font-medium">لم يتم إنشاء ملف تحقيق لهذا الوارد بعد</p>
+                <button 
+                  onClick={() => setShowInvestigationForm(true)}
+                  className="px-8 py-3 bg-amber-600 text-white rounded-xl font-bold shadow-lg shadow-amber-600/20 flex items-center gap-2 hover:bg-amber-700 transition-all"
+                >
+                  <Plus className="w-5 h-5" /> إنشاء ملف تحقيق جديد
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -2785,6 +2853,106 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Final Status Section - Always at the bottom */}
+      {isEditing && currentCase?.status !== 'closed' && (
+        <div className="bg-white rounded-2xl shadow-sm border border-indigo-100 mt-8 overflow-hidden">
+          <div className="p-4 bg-indigo-600 text-white flex items-center gap-3">
+            <CheckCircle2 className="w-5 h-5" />
+            <h3 className="font-bold">تحديث حالة الوارد النهائية</h3>
+          </div>
+          <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div className="space-y-2">
+              <label className="block text-sm font-bold text-gray-700">حالة الوارد <span className="text-red-500">*</span></label>
+              <select 
+                {...register('case_status_v2', { required: true })}
+                className={`w-full px-4 py-3 border-2 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all ${errors.case_status_v2 ? 'border-red-500 bg-red-50' : 'border-indigo-100 bg-indigo-50/30'}`}
+              >
+                <option value="">اختر الحالة...</option>
+                {CASE_STATUS_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+              </select>
+              {errors.case_status_v2 && <p className="text-xs text-red-500 font-bold">يجب اختيار حالة الوارد</p>}
+            </div>
+
+            {['منتهي فحص', 'منتهي تحقيق', 'منتهي محاكمة'].includes(watch('case_status_v2') || '') && (
+              <div className="space-y-2 animate-in fade-in slide-in-from-top-2">
+                <label className="block text-sm font-bold text-gray-700">تفاصيل الحالة <span className="text-red-500">*</span></label>
+                <select 
+                  {...register('case_status_detail', { required: true })}
+                  className={`w-full px-4 py-3 border-2 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all ${errors.case_status_detail ? 'border-red-500 bg-red-50' : 'border-gray-200 bg-white'}`}
+                >
+                  <option value="">اختر النتيجة...</option>
+                  {watch('case_status_v2') === 'منتهي فحص' && FINISHED_INSPECTION_RESULTS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                  {watch('case_status_v2') === 'منتهي تحقيق' && FINISHED_INVESTIGATION_RESULTS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                  {watch('case_status_v2') === 'منتهي محاكمة' && FINISHED_TRIAL_RESULTS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
+                {errors.case_status_detail && <p className="text-xs text-red-500 font-bold">يجب اختيار تفاصيل الحالة</p>}
+              </div>
+            )}
+
+            {['قيد محاكمة', 'منتهى محاكمة'].includes(watch('case_status_v2') || '') && (
+              <>
+                <div className="space-y-2">
+                  <label className="block text-sm font-bold text-gray-700">رقم دعوى التأديب</label>
+                  <input 
+                    {...register('trial_number')}
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                    placeholder="رقم الدعوى..."
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="block text-sm font-bold text-gray-700">سنة دعوى التأديب</label>
+                  <select 
+                    {...register('trial_year')}
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                  >
+                    <option value="">اختر السنة...</option>
+                    {[2026, 2025, 2024, 2023, 2022].map(y => <option key={y} value={y}>{y}</option>)}
+                  </select>
+                </div>
+              </>
+            )}
+          </div>
+          
+          <div className="p-6 bg-gray-50 border-t border-gray-100 flex justify-end gap-4">
+            {currentCase?.status === 'finished' && (
+              <button 
+                type="button"
+                onClick={handleArchive}
+                disabled={isLoading}
+                className="flex items-center gap-3 px-10 py-4 text-lg font-bold text-white bg-emerald-600 rounded-2xl hover:bg-emerald-700 transition-all shadow-xl shadow-emerald-600/30 disabled:opacity-50 active:scale-95"
+              >
+                {isLoading ? <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full" /> : <Archive className="w-6 h-6" />}
+                أرشفة الملف (إغلاق نهائي)
+              </button>
+            )}
+
+            {['منتهي فحص', 'منتهي تحقيق', 'منتهي محاكمة'].includes(watch('case_status_v2') || '') && currentCase?.status !== 'finished' && currentCase?.status !== 'closed' && (
+              <button 
+                type="button"
+                onClick={() => handleSave(true)}
+                disabled={isLoading}
+                className="flex items-center gap-3 px-10 py-4 text-lg font-bold text-white bg-amber-600 rounded-2xl hover:bg-amber-700 transition-all shadow-xl shadow-amber-600/30 disabled:opacity-50 active:scale-95"
+              >
+                {isLoading ? <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full" /> : <CheckCircle2 className="w-6 h-6" />}
+                حفظ كملف منتهي
+              </button>
+            )}
+
+             {currentCase?.status !== 'closed' && (
+               <button 
+                type="button"
+                onClick={() => handleSave(false)}
+                disabled={isLoading}
+                className="flex items-center gap-3 px-10 py-4 text-lg font-bold text-white bg-indigo-600 rounded-2xl hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-600/30 disabled:opacity-50 active:scale-95"
+              >
+                {isLoading ? <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full" /> : <Save className="w-6 h-6" />}
+                حفظ كمسودة
+              </button>
+             )}
+          </div>
         </div>
       )}
     </div>

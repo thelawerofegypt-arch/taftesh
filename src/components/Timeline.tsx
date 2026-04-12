@@ -6,6 +6,7 @@ import { STATUS_TRANSLATIONS } from '../constants';
 interface TimelineProps {
   currentStage: 'incoming' | 'inspection' | 'investigation' | 'council';
   status: string;
+  descriptiveStatus?: string;
 }
 
 const stages = [
@@ -15,7 +16,7 @@ const stages = [
   { id: 'council', label: 'المجلس', description: 'مجلس التأديب / الصلاحية' },
 ];
 
-export default function Timeline({ currentStage, status }: TimelineProps) {
+export default function Timeline({ currentStage, status, descriptiveStatus }: TimelineProps) {
   const currentIndex = stages.findIndex(s => s.id === currentStage);
 
   return (
@@ -60,11 +61,11 @@ export default function Timeline({ currentStage, status }: TimelineProps) {
         <div className={clsx(
           "px-4 py-1.5 rounded-full text-xs font-bold flex items-center gap-2",
           status === 'closed' ? "bg-gray-100 text-gray-600" :
-          status === 'finished' ? "bg-green-100 text-green-700" :
+          status === 'finished' || descriptiveStatus?.includes('منتهي') ? "bg-green-100 text-green-700" :
           "bg-amber-100 text-amber-700"
         )}>
           <AlertCircle className="w-3.5 h-3.5" />
-          الحالة الحالية: {STATUS_TRANSLATIONS[status] || status}
+          الحالة الحالية: {descriptiveStatus || STATUS_TRANSLATIONS[status] || status}
         </div>
       </div>
     </div>
