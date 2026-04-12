@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { apiFetch } from '../lib/api';
 import { 
   FileText, 
   Clock, 
@@ -13,6 +14,7 @@ import {
   Activity,
   ShieldCheck
 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 import { Case } from '../types';
 import { STATUS_TRANSLATIONS, STAGE_TRANSLATIONS } from '../constants';
 import { getDescriptiveStatus } from '../utils/caseUtils';
@@ -35,6 +37,7 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ onCaseSelect }: DashboardProps) {
+  const { user } = useAuth();
   const [allCases, setAllCases] = useState<Case[]>([]);
   const [stats, setStats] = useState({
     total: 0,
@@ -46,7 +49,7 @@ export default function Dashboard({ onCaseSelect }: DashboardProps) {
   const [chartData, setChartData] = useState<any[]>([]);
 
   useEffect(() => {
-    fetch('/api/cases')
+    apiFetch('/api/cases')
       .then(res => res.json())
       .then(data => {
         setAllCases(data);
@@ -116,9 +119,11 @@ export default function Dashboard({ onCaseSelect }: DashboardProps) {
               منصة متكاملة لمتابعة دورة عمل التفتيش والتحقيق بدقة متناهية وتقارير لحظية تدعم اتخاذ القرار.
             </p>
             <div className="flex flex-wrap gap-6">
-              <button className="bg-white text-slate-900 px-12 py-5 rounded-2xl font-bold text-lg hover:bg-emerald-50 transition-all active:scale-95 shadow-2xl shadow-black/20">
-                ابدأ وارد جديد
-              </button>
+              {user?.role !== 'searcher' && (
+                <button className="bg-white text-slate-900 px-12 py-5 rounded-2xl font-bold text-lg hover:bg-emerald-50 transition-all active:scale-95 shadow-2xl shadow-black/20">
+                  ابدأ وارد جديد
+                </button>
+              )}
               <button 
                 onClick={exportAll}
                 className="bg-white/5 text-white border border-white/10 px-12 py-5 rounded-2xl font-bold text-lg hover:bg-white/10 transition-all active:scale-95 flex items-center justify-center gap-3 backdrop-blur-md"

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { apiFetch } from '../lib/api';
 import { Search, ChevronDown, Check } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -31,7 +32,7 @@ export default function ProsecutionSearchableSelect({ label, placeholder, value,
   useEffect(() => {
     const fetchOffices = async () => {
       try {
-        const res = await fetch('/api/prosecution-offices');
+        const res = await apiFetch('/api/prosecution-offices');
         if (!res.ok) throw new Error("Failed to fetch");
         const data = await res.json();
         setOffices(data);

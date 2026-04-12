@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { apiFetch } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
 import { 
   FileText, 
   Search, 
@@ -20,6 +22,7 @@ interface CaseListProps {
 }
 
 export default function CaseList({ status, title, onCaseSelect }: CaseListProps) {
+  const { user } = useAuth();
   const [cases, setCases] = useState<Case[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -29,7 +32,7 @@ export default function CaseList({ status, title, onCaseSelect }: CaseListProps)
 
   useEffect(() => {
     setIsLoading(true);
-    fetch('/api/cases')
+    apiFetch('/api/cases')
       .then(res => res.json())
       .then(data => {
         if (status === 'old') {
@@ -181,13 +184,13 @@ export default function CaseList({ status, title, onCaseSelect }: CaseListProps)
                       {getDescriptiveStatus(c)}
                     </span>
                     <div className="flex items-center gap-2">
-                      {c.status === 'finished' && (
+                      {c.status === 'finished' && (user?.role === 'developer' || user?.role === 'admin') && (
                         <button 
                           onClick={async (e) => {
                             e.stopPropagation();
                             if (!confirm('هل أنت متأكد من أرشفة هذا الملف؟ لا يمكن التعديل عليه بعد الأرشفة.')) return;
                             try {
-                              await fetch(`/api/cases/${c.id}`, {
+                              await apiFetch(`/api/cases/${c.id}`, {
                                 method: 'PATCH',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ status: 'closed' }),

@@ -1,10 +1,11 @@
 import React from 'react';
+import { apiFetch } from '../lib/api';
 import { Download, Upload, Database, ShieldAlert, Trash2 } from 'lucide-react';
 
 export default function SystemManagement() {
   const handleExportJSON = async () => {
     try {
-      const res = await fetch('/api/cases');
+      const res = await apiFetch('/api/cases');
       const cases = await res.json();
       const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(cases));
       const downloadAnchorNode = document.createElement('a');
@@ -42,7 +43,7 @@ export default function SystemManagement() {
     }
 
     try {
-      const res = await fetch('/api/system/clear-data', { method: 'POST' });
+      const res = await apiFetch('/api/system/clear-data', { method: 'POST' });
       if (res.ok) {
         alert('تم مسح كافة البيانات بنجاح');
         window.location.reload();

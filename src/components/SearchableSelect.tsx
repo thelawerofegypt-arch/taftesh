@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { apiFetch } from '../lib/api';
 import { Search, ChevronDown, Check } from 'lucide-react';
 import { Member } from '../types';
 import { clsx, type ClassValue } from 'clsx';
@@ -31,7 +32,7 @@ export default function SearchableSelect({ label, placeholder, value, onChange, 
         const url = search 
           ? `/api/members?search=${encodeURIComponent(search)}`
           : '/api/members';
-        const res = await fetch(url);
+        const res = await apiFetch(url);
         if (!res.ok) throw new Error("Failed to fetch");
         const data = await res.json();
         setMembers(data);
@@ -57,7 +58,7 @@ export default function SearchableSelect({ label, placeholder, value, onChange, 
 
         // Otherwise fetch it
         try {
-          const res = await fetch(`/api/members`);
+          const res = await apiFetch(`/api/members`);
           const data = await res.json();
           const found = data.find((m: Member) => m.id === value);
           if (found) setSelectedMember(found);
@@ -74,7 +75,7 @@ export default function SearchableSelect({ label, placeholder, value, onChange, 
   // Ensure members are loaded when dropdown opens
   useEffect(() => {
     if (isOpen && members.length === 0 && !disabled) {
-      fetch('/api/members')
+      apiFetch('/api/members')
         .then(res => res.json())
         .then(data => setMembers(data))
         .catch(err => console.error(err));

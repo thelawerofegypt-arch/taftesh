@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { apiFetch } from '../lib/api';
 import { History, User, Database, Clock, Search } from 'lucide-react';
 
 export default function AuditLogView() {
@@ -6,8 +7,8 @@ export default function AuditLogView() {
   const [search, setSearch] = useState('');
 
   useEffect(() => {
-    fetch('/api/cases') // We need a general audit API, but for now we can fetch all cases and then their logs, or better, add a general audit endpoint
-    fetch('/api/audit/all')
+    apiFetch('/api/cases') // We need a general audit API, but for now we can fetch all cases and then their logs, or better, add a general audit endpoint
+    apiFetch('/api/audit/all')
       .then(res => res.json())
       .then(data => setLogs(Array.isArray(data) ? data : []));
   }, []);

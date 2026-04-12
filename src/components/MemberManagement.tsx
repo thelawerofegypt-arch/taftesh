@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { apiFetch } from '../lib/api';
 import { 
   Plus, 
   Search, 
@@ -44,6 +45,7 @@ export default function MemberManagement() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [includeInactive, setIncludeInactive] = useState(false);
   const [selectedMember, setSelectedMember] = useState<ProsecutionMember | null>(null);
   const [editingMember, setEditingMember] = useState<ProsecutionMember | null>(null);
   const [memberHistory, setMemberHistory] = useState<MemberHistoryItem[]>([]);
@@ -71,7 +73,7 @@ export default function MemberManagement() {
   const fetchMembers = useCallback(async () => {
     setIsLoading(true);
     try {
-      const res = await fetch(`/api/prosecution-members?search=${encodeURIComponent(search)}&page=${page}&limit=50`);
+      const res = await apiFetch(`/api/prosecution-members?search=${encodeURIComponent(search)}&page=${page}&limit=50&include_inactive=${includeInactive}`);
       const data = await res.json();
       if (Array.isArray(data)) {
         setMembers(data);
@@ -105,7 +107,7 @@ export default function MemberManagement() {
     
     setIsLoading(true);
     try {
-      const res = await fetch('/api/prosecution-members', {
+      const res = await apiFetch('/api/prosecution-members', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newMember),
@@ -145,7 +147,7 @@ export default function MemberManagement() {
     
     setIsLoading(true);
     try {
-      const res = await fetch(`/api/prosecution-members/${editingMember.id}`, {
+      const res = await apiFetch(`/api/prosecution-members/${editingMember.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editingMember),
@@ -168,7 +170,7 @@ export default function MemberManagement() {
   const handleDelete = async (id: number) => {
     if (!confirm('هل أنت متأكد من حذف هذا العضو؟')) return;
     try {
-      const res = await fetch(`/api/prosecution-members/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/prosecution-members/${id}`, { method: 'DELETE' });
       if (res.ok) {
         fetchMembers();
       }
@@ -218,7 +220,7 @@ export default function MemberManagement() {
         setImportProgress(30);
 
         const endpoint = type === 'new' ? '/api/prosecution-members/import' : '/api/prosecution-members/update-bulk';
-        const res = await fetch(endpoint, {
+        const res = await apiFetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ members: formattedMembers }),
@@ -246,7 +248,7 @@ export default function MemberManagement() {
     setShowHistoryModal(true);
     setIsHistoryLoading(true);
     try {
-      const res = await fetch(`/api/prosecution-members/${member.id}/full-history`);
+      const res = await apiFetch(`/api/prosecution-members/${member.id}/full-history`);
       if (res.ok) {
         const data = await res.json();
         setMemberHistory(data);
@@ -303,6 +305,15 @@ export default function MemberManagement() {
           />
         </div>
         <div className="flex flex-wrap gap-3">
+          <label className="flex items-center gap-2 px-4 py-2.5 bg-gray-50 text-gray-700 border border-gray-200 rounded-xl font-bold cursor-pointer hover:bg-gray-100 transition-all">
+            <input 
+              type="checkbox" 
+              checked={includeInactive}
+              onChange={(e) => setIncludeInactive(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            <span className="text-sm">إظهار المستبعدين</span>
+          </label>
           <button 
             onClick={() => setShowImportModal(true)}
             className="flex items-center gap-2 px-4 py-2.5 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-xl font-bold hover:bg-emerald-100 transition-all"
@@ -348,14 +359,19 @@ export default function MemberManagement() {
                   </td>
                 </tr>
               ) : members.map((member, idx) => (
-                <tr key={member.id} className="hover:bg-gray-50/50 transition-colors group">
+                <tr key={member.id} className={`hover:bg-gray-50/50 transition-colors group ${member.is_active === 0 ? 'bg-gray-50 opacity-75' : ''}`}>
                   <td className="px-6 py-4 text-sm text-gray-400">{(page - 1) * 50 + idx + 1}</td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center font-bold text-xs">
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs ${member.is_active === 0 ? 'bg-gray-200 text-gray-500' : 'bg-indigo-100 text-indigo-600'}`}>
                         {member.name.charAt(0)}
                       </div>
-                      <span className="font-bold text-gray-900">{member.name}</span>
+                      <div className="flex flex-col">
+                        <span className="font-bold text-gray-900">{member.name}</span>
+                        {member.is_active === 0 && (
+                          <span className="text-[10px] text-red-500 font-bold">مستبعد من العمل</span>
+                        )}
+                      </div>
                     </div>
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-600">{member.grade}</td>
@@ -378,12 +394,35 @@ export default function MemberManagement() {
                       >
                         <Eye className="w-4 h-4" />
                       </button>
-                      <button 
-                        onClick={() => handleDelete(member.id)}
-                        className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {member.is_active === 0 ? (
+                        <button 
+                          onClick={async () => {
+                            if (!confirm('هل تود استعادة هذا العضو للعمل؟')) return;
+                            try {
+                              const res = await apiFetch(`/api/prosecution-members/${member.id}`, {
+                                method: 'PATCH',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ is_active: 1 }),
+                              });
+                              if (res.ok) fetchMembers();
+                            } catch (error) {
+                              console.error(error);
+                            }
+                          }}
+                          className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-all"
+                          title="استعادة للعمل"
+                        >
+                          <RefreshCw className="w-4 h-4" />
+                        </button>
+                      ) : (
+                        <button 
+                          onClick={() => handleDelete(member.id)}
+                          className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+                          title="استبعاد"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

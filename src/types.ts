@@ -21,6 +21,7 @@ export interface ProsecutionMember {
   created_at: string;
   updated_at: string;
   total_count?: number;
+  is_active?: number;
 }
 
 export interface Case {

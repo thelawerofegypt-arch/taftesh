@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { apiFetch } from '../lib/api';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { Save, Lock, Unlock, History, FileText, ArrowLeft, Plus, Trash2, ExternalLink, Search, AlertCircle, ChevronDown, Archive, UserPlus, Users, X, CheckCircle2, Clock } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -6,8 +7,10 @@ import SearchableSelect from './SearchableSelect';
 import ProsecutionSearchableSelect from './ProsecutionSearchableSelect';
 import Timeline from './Timeline';
 import { getDescriptiveStatus } from '../utils/caseUtils';
+import { AuthProvider, useAuth } from '../contexts/AuthContext';
 import { Case, Member } from '../types';
 import { CASE_STATUS_OPTIONS, FINISHED_INSPECTION_RESULTS, FINISHED_INVESTIGATION_RESULTS, FINISHED_TRIAL_RESULTS } from '../constants';
+import { queueRequest } from '../lib/offline';
 
 interface CaseFormProps {
   caseId?: number;
@@ -992,6 +995,8 @@ interface CaseFormData {
 }
 
 export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
+  const { user } = useAuth();
+  const isReadOnly = user?.role === 'searcher' || (user?.role === 'data_collector' && !!caseId);
   const [currentCase, setCurrentCase] = useState<Case | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isEditing, setIsEditing] = useState(!caseId);
@@ -1224,7 +1229,16 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
         const method = caseId ? 'PATCH' : 'POST';
 
         console.log("Sending fetch request to:", url, "Method:", method, "Status:", payload.status);
-        const res = await fetch(url, {
+        
+        if (!navigator.onLine) {
+          await queueRequest(url, method, payload);
+          window.alert("تم حفظ البيانات محلياً (أوفلاين). سيتم المزامنة تلقائياً عند عودة الاتصال.");
+          const targetTab = isFinal ? 'finished-incomings' : 'ongoing-incomings';
+          onSuccess(targetTab);
+          return;
+        }
+
+        const res = await apiFetch(url, {
           method,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -1298,7 +1312,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
       if (isLocked('inspection_number')) return;
 
       if (decision === 'فحص') {
-        fetch(`/api/inspections/next-number?year=${inspectionYear || new Date().getFullYear().toString()}`)
+        apiFetch(`/api/inspections/next-number?year=${inspectionYear || new Date().getFullYear().toString()}`)
           .then(res => res.json())
           .then(data => {
             if (data.nextNumber) {
@@ -1329,7 +1343,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
         if (investigationsToNumber.length > 0) {
           investigationsToNumber.forEach(item => numberingInProgress.current.add(item.key));
           const year = investigationsToNumber[0].year;
-          fetch(`/api/investigations/next-number?year=${year}`)
+          apiFetch(`/api/investigations/next-number?year=${year}`)
             .then(res => res.json())
             .then(data => {
               if (data.nextNumber) {
@@ -1382,7 +1396,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
         if (objectionsToNumber.length > 0) {
           objectionsToNumber.forEach(item => numberingInProgress.current.add(item.key));
           const year = objectionsToNumber[0].year;
-          fetch(`/api/objections/next-number?year=${year}`)
+          apiFetch(`/api/objections/next-number?year=${year}`)
             .then(res => res.json())
             .then(data => {
               if (data.nextNumber) {
@@ -1405,7 +1419,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
     useEffect(() => {
       // Fetch next investigation number when stage is investigation and no investigation exists yet
       if (currentCase?.current_stage === 'investigation' && !currentCase.investigation) {
-        fetch(`/api/investigations/next-number?year=${investigationYear || new Date().getFullYear().toString()}`)
+        apiFetch(`/api/investigations/next-number?year=${investigationYear || new Date().getFullYear().toString()}`)
           .then(res => res.json())
           .then(data => {
             if (data.nextNumber) {
@@ -1435,7 +1449,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
 
     useEffect(() => {
       if (caseId) {
-        fetch(`/api/cases/${caseId}`)
+        apiFetch(`/api/cases/${caseId}`)
           .then(res => res.json())
           .then(async (data) => {
             setCurrentCase(data);
@@ -1446,7 +1460,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
               data.accused_member_count = data.member_ids.length.toString();
               
               // Fetch details for all members to populate rank/office
-              const membersRes = await fetch('/api/members');
+              const membersRes = await apiFetch('/api/members');
               const allMembers = await membersRes.json();
               
               data.accused_members = data.member_ids.map((id: number) => {
@@ -1485,7 +1499,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
     }, [caseId, reset]);
 
     useEffect(() => {
-      fetch('/api/prosecution-offices')
+      apiFetch('/api/prosecution-offices')
         .then(res => res.json())
         .then(data => setProsecutions(data.map((p: any) => ({ id: p.id, name: p.prosecution_name }))));
     }, []);
@@ -1494,7 +1508,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
     if (!caseId) return;
     setIsLoading(true);
     try {
-      await fetch(`/api/cases/${caseId}`, {
+      await apiFetch(`/api/cases/${caseId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ current_stage: stage, status }),
@@ -1520,7 +1534,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
     }
     setIsLoading(true);
     try {
-      const res = await fetch('/api/inspections', {
+      const res = await apiFetch('/api/inspections', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...data, case_id: caseId }),
@@ -1538,7 +1552,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
 
   useEffect(() => {
     if (caseId) {
-      fetch(`/api/audit/${caseId}`)
+      apiFetch(`/api/audit/${caseId}`)
         .then(res => res.json())
         .then(data => setAuditLogs(data));
     }
@@ -1557,7 +1571,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
     }
     setIsLoading(true);
     try {
-      const res = await fetch('/api/investigations', {
+      const res = await apiFetch('/api/investigations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -1577,7 +1591,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
   const handleCreateCouncil = async (data: any) => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/councils', {
+      const res = await apiFetch('/api/councils', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...data, case_id: caseId }),
@@ -1594,7 +1608,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
     if (!currentCase?.inspection?.id) return;
     setIsLoading(true);
     try {
-      await fetch(`/api/inspections/${currentCase.inspection.id}`, {
+      await apiFetch(`/api/inspections/${currentCase.inspection.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
@@ -1611,7 +1625,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
     if (!currentCase?.investigation?.id) return;
     setIsLoading(true);
     try {
-      await fetch(`/api/investigations/${currentCase.investigation.id}`, {
+      await apiFetch(`/api/investigations/${currentCase.investigation.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
@@ -1628,7 +1642,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
     if (!confirm('هل أنت متأكد من أرشفة هذا الملف؟ لا يمكن التعديل عليه بعد الأرشفة.')) return;
     setIsLoading(true);
     try {
-      await fetch(`/api/cases/${caseId}`, {
+      await apiFetch(`/api/cases/${caseId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'closed' }),
@@ -2917,7 +2931,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
           </div>
           
           <div className="p-6 bg-gray-50 border-t border-gray-100 flex justify-end gap-4">
-            {currentCase?.status === 'finished' && (
+            {!isReadOnly && currentCase?.status === 'finished' && (
               <button 
                 type="button"
                 onClick={handleArchive}
@@ -2929,7 +2943,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
               </button>
             )}
 
-            {['منتهي فحص', 'منتهي تحقيق', 'منتهي محاكمة'].includes(watch('case_status_v2') || '') && currentCase?.status !== 'finished' && currentCase?.status !== 'closed' && (
+            {!isReadOnly && ['منتهي فحص', 'منتهي تحقيق', 'منتهي محاكمة'].includes(watch('case_status_v2') || '') && currentCase?.status !== 'finished' && currentCase?.status !== 'closed' && (
               <button 
                 type="button"
                 onClick={() => handleSave(true)}
@@ -2941,7 +2955,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
               </button>
             )}
 
-             {currentCase?.status !== 'closed' && (
+             {!isReadOnly && currentCase?.status !== 'closed' && (
                <button 
                 type="button"
                 onClick={() => handleSave(false)}

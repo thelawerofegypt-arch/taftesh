@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { apiFetch } from '../lib/api';
 import { Search, Filter, Calendar, FileText, User, MapPin, ArrowRight, Download, ChevronDown } from 'lucide-react';
 import { Case } from '../types';
 import { STATUS_TRANSLATIONS, CASE_STATUS_OPTIONS, FINISHED_INSPECTION_RESULTS, FINISHED_INVESTIGATION_RESULTS, FINISHED_TRIAL_RESULTS } from '../constants';
@@ -26,7 +27,7 @@ export default function AdvancedSearch({ onCaseSelect }: AdvancedSearchProps) {
     e.preventDefault();
     setIsSearching(true);
     try {
-      const res = await fetch('/api/cases');
+      const res = await apiFetch('/api/cases');
       const allCases: Case[] = await res.json();
       
       const filtered = allCases.filter(c => {

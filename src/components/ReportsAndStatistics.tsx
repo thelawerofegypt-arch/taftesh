@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { apiFetch } from '../lib/api';
 import { 
   BarChart3, 
   RefreshCw, 
@@ -18,12 +19,14 @@ import {
 } from 'lucide-react';
 import { Document, Packer, Paragraph, Table, TableRow, TableCell, AlignmentType, WidthType, BorderStyle, TextRun } from 'docx';
 import { saveAs } from 'file-saver';
+import { useAuth } from '../contexts/AuthContext';
 import { STATUS_TRANSLATIONS } from '../constants';
 
 interface MemberStat {
   member_name: string;
   grade: string;
   seniority: number;
+  is_active: number;
   total_inspections: number;
   total_investigations: number;
   finished_inspections: number;
@@ -48,10 +51,12 @@ interface MemberDetails {
 }
 
 export default function ReportsAndStatistics() {
+  const { user } = useAuth();
   const [stats, setStats] = useState<MemberStat[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [showInactive, setShowInactive] = useState(false);
   const [detailSearchTerm, setDetailSearchTerm] = useState('');
   const [selectedMember, setSelectedMember] = useState<string | null>(null);
   const [memberDetails, setMemberDetails] = useState<MemberDetails | null>(null);
@@ -63,7 +68,7 @@ export default function ReportsAndStatistics() {
   const fetchStats = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/reports/member-stats');
+      const res = await apiFetch('/api/reports/member-stats');
       const data = await res.json();
       setStats(Array.isArray(data) ? data : []);
     } catch (error) {
@@ -75,7 +80,7 @@ export default function ReportsAndStatistics() {
 
   const fetchSummary = async () => {
     try {
-      const res = await fetch('/api/reports/summary');
+      const res = await apiFetch('/api/reports/summary');
       const data = await res.json();
       setSummary(data);
     } catch (error) {
@@ -91,7 +96,7 @@ export default function ReportsAndStatistics() {
   const handleSync = async () => {
     setIsSyncing(true);
     try {
-      const res = await fetch('/api/reports/sync', { method: 'POST' });
+      const res = await apiFetch('/api/reports/sync', { method: 'POST' });
       if (res.ok) {
         fetchStats();
         fetchSummary();
@@ -106,7 +111,7 @@ export default function ReportsAndStatistics() {
   const fetchMemberDetails = async (name: string) => {
     setIsLoading(true);
     try {
-      const res = await fetch(`/api/reports/member/${encodeURIComponent(name)}/details`);
+      const res = await apiFetch(`/api/reports/member/${encodeURIComponent(name)}/details`);
       const data = await res.json();
       setMemberDetails(data);
       setSelectedMember(name);
@@ -117,9 +122,11 @@ export default function ReportsAndStatistics() {
     }
   };
 
-  const filteredStats = stats.filter(s => 
-    s.member_name.includes(searchTerm) || s.grade.includes(searchTerm)
-  );
+  const filteredStats = stats.filter(s => {
+    const matchesSearch = s.member_name.includes(searchTerm) || s.grade.includes(searchTerm);
+    const matchesInactive = showInactive || s.is_active === 1;
+    return matchesSearch && matchesInactive;
+  });
 
   const calculatePercentage = (finished: number, total: number) => {
     if (total === 0) return 0;
@@ -402,14 +409,16 @@ export default function ReportsAndStatistics() {
           </div>
         </div>
         <div className="flex gap-3">
-          <button 
-            onClick={handleSync}
-            disabled={isSyncing}
-            className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 transition-all disabled:opacity-50"
-          >
-            {isSyncing ? <Loader2 className="w-5 h-5 animate-spin" /> : <RefreshCw className="w-5 h-5" />}
-            تحديث البيانات
-          </button>
+          {(user?.role === 'developer' || user?.role === 'admin') && (
+            <button 
+              onClick={handleSync}
+              disabled={isSyncing}
+              className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 transition-all disabled:opacity-50"
+            >
+              {isSyncing ? <Loader2 className="w-5 h-5 animate-spin" /> : <RefreshCw className="w-5 h-5" />}
+              تحديث البيانات
+            </button>
+          )}
         </div>
       </div>
 
@@ -519,6 +528,15 @@ export default function ReportsAndStatistics() {
                 className="w-full pr-12 pl-4 py-3 bg-gray-50 border-none rounded-xl focus:ring-2 focus:ring-indigo-500 transition-all"
               />
             </div>
+            <label className="flex items-center gap-2 px-4 py-3 bg-gray-50 text-gray-700 border border-gray-100 rounded-xl font-bold cursor-pointer hover:bg-gray-100 transition-all">
+              <input 
+                type="checkbox" 
+                checked={showInactive}
+                onChange={(e) => setShowInactive(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              <span className="text-sm">إظهار المستبعدين/المنقولين</span>
+            </label>
             <div className="flex gap-2">
               <button 
                 onClick={handlePrint}
@@ -563,14 +581,19 @@ export default function ReportsAndStatistics() {
                     const invPerc = calculatePercentage(s.finished_investigations, s.total_investigations);
                     
                     return (
-                      <tr key={idx} className="hover:bg-gray-50/50 transition-colors group">
+                      <tr key={idx} className={`hover:bg-gray-50/50 transition-colors group ${s.is_active === 0 ? 'bg-gray-50/80 opacity-80' : ''}`}>
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center font-bold text-xs">
+                            <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs ${s.is_active === 0 ? 'bg-gray-200 text-gray-500' : 'bg-indigo-50 text-indigo-600'}`}>
                               {s.member_name.charAt(0)}
                             </div>
                             <div>
-                              <p className="font-bold text-gray-900">{s.member_name}</p>
+                              <div className="flex items-center gap-2">
+                                <p className="font-bold text-gray-900">{s.member_name}</p>
+                                {s.is_active === 0 && (
+                                  <span className="text-[10px] bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-bold">مستبعد/منقول</span>
+                                )}
+                              </div>
                               <p className="text-[10px] text-gray-400">{s.grade}</p>
                             </div>
                           </div>

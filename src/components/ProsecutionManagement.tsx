@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { apiFetch } from '../lib/api';
 import { 
   Building2, 
   RefreshCw, 
@@ -39,7 +40,7 @@ export default function ProsecutionManagement() {
   const fetchOffices = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/prosecution-offices');
+      const res = await apiFetch('/api/prosecution-offices');
       const data = await res.json();
       setOffices(Array.isArray(data) ? data : []);
     } catch (error) {
@@ -56,7 +57,7 @@ export default function ProsecutionManagement() {
   const handleSync = async () => {
     setIsSyncing(true);
     try {
-      const res = await fetch('/api/prosecution-offices/sync', { method: 'POST' });
+      const res = await apiFetch('/api/prosecution-offices/sync', { method: 'POST' });
       if (res.ok) {
         fetchOffices();
       }
@@ -70,7 +71,7 @@ export default function ProsecutionManagement() {
   const fetchOfficeMembers = async (office: ProsecutionOffice) => {
     setIsLoading(true);
     try {
-      const res = await fetch(`/api/prosecution-offices/${encodeURIComponent(office.prosecution_name)}/members`);
+      const res = await apiFetch(`/api/prosecution-offices/${encodeURIComponent(office.prosecution_name)}/members`);
       const data = await res.json();
       setOfficeMembers(Array.isArray(data) ? data : []);
       setSelectedOffice(office);
@@ -84,7 +85,7 @@ export default function ProsecutionManagement() {
   const fetchAllFormations = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/prosecution-offices/all-formations');
+      const res = await apiFetch('/api/prosecution-offices/all-formations');
       const data = await res.json();
       setAllFormations(Array.isArray(data) ? data : []);
       setShowAllFormations(true);
@@ -323,7 +324,7 @@ export default function ProsecutionManagement() {
 
     setIsLoading(true);
     try {
-      const res = await fetch('/api/prosecution-offices', {
+      const res = await apiFetch('/api/prosecution-offices', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prosecution_name: newOfficeName.trim() })

@@ -16,7 +16,9 @@ import {
   FileText,
   Clock,
   CheckCircle2,
-  BarChart3
+  BarChart3,
+  WifiOff,
+  User
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import CaseForm from './components/CaseForm';
@@ -28,24 +30,51 @@ import ProsecutionManagement from './components/ProsecutionManagement';
 import ReportsAndStatistics from './components/ReportsAndStatistics';
 import CaseList from './components/CaseList';
 import SystemManagement from './components/SystemManagement';
+import Login from './components/Login';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Case } from './types';
 
-export default function App() {
+function AppContent() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [selectedCaseId, setSelectedCaseId] = useState<number | null>(null);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const { user, logout, isLoading } = useAuth();
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Login />;
+  }
 
   const menuItems = [
-    { id: 'dashboard', label: 'لوحة التحكم', icon: LayoutDashboard },
-    { id: 'new-case', label: 'وارد جديد', icon: FilePlus },
-    { id: 'old-incomings', label: 'الواردات القديمة', icon: History },
-    { id: 'search', label: 'البحث المتقدم', icon: Search },
-    { id: 'members', label: 'أعضاء النيابة', icon: Users },
-    { id: 'prosecutions', label: 'تشكيل النيابات', icon: Database },
-    { id: 'reports', label: 'التقارير والإحصائيات', icon: BarChart3 },
-    { id: 'audit', label: 'سجل العمليات', icon: History },
-    { id: 'system', label: 'إدارة النظام', icon: Settings },
-  ];
+    { id: 'dashboard', label: 'لوحة التحكم', icon: LayoutDashboard, roles: ['developer', 'admin', 'editor', 'data_collector', 'searcher'] },
+    { id: 'new-case', label: 'وارد جديد', icon: FilePlus, roles: ['developer', 'admin', 'editor', 'data_collector'] },
+    { id: 'old-incomings', label: 'الواردات القديمة', icon: History, roles: ['developer', 'admin', 'editor', 'searcher'] },
+    { id: 'search', label: 'البحث المتقدم', icon: Search, roles: ['developer', 'admin', 'editor', 'data_collector', 'searcher'] },
+    { id: 'members', label: 'أعضاء النيابة', icon: Users, roles: ['developer', 'admin'] },
+    { id: 'prosecutions', label: 'تشكيل النيابات', icon: Database, roles: ['developer', 'admin'] },
+    { id: 'reports', label: 'التقارير والإحصائيات', icon: BarChart3, roles: ['developer', 'admin', 'editor', 'data_collector', 'searcher'] },
+    { id: 'audit', label: 'سجل العمليات', icon: History, roles: ['developer'] },
+    { id: 'system', label: 'إدارة النظام', icon: Settings, roles: ['developer'] },
+  ].filter(item => item.roles.includes(user.role));
 
   const handleCaseSelect = (id: number) => {
     setSelectedCaseId(id);
@@ -71,7 +100,7 @@ export default function App() {
                 <ShieldCheck className="w-7 h-7" />
               </div>
               <div>
-                <h1 className="font-display font-bold text-xl leading-tight tracking-tight">التفتيش القضائي</h1>
+                <h1 className="font-display font-bold text-xl leading-tight tracking-tight text-white">التفتيش القضائي</h1>
                 <p className="text-[10px] text-slate-400 uppercase tracking-[0.2em] font-bold mt-0.5">النيابة الإدارية</p>
               </div>
             </motion.div>
@@ -110,9 +139,12 @@ export default function App() {
         </nav>
 
         <div className="p-6 border-t border-white/5">
-          <button className="w-full flex items-center gap-4 px-5 py-4 text-slate-400 hover:bg-rose-500/10 hover:text-rose-400 rounded-2xl transition-all duration-300 group">
+          <button 
+            onClick={logout}
+            className="w-full flex items-center gap-4 px-5 py-4 text-slate-400 hover:bg-rose-500/10 hover:text-rose-400 rounded-2xl transition-all duration-300 group"
+          >
             <LogOut className="w-5 h-5 transition-transform group-hover:-translate-x-1" />
-            {isSidebarOpen && <span className="font-semibold tracking-wide">تسجيل الخروج</span>}
+            {isSidebarOpen && <span className="font-semibold tracking-wide text-white">تسجيل الخروج</span>}
           </button>
         </div>
       </aside>
@@ -128,13 +160,24 @@ export default function App() {
             <p className="text-slate-400 mt-2 font-medium">إدارة دورة عمل التفتيش القضائي - النيابة الإدارية</p>
           </div>
           <div className="flex items-center gap-6">
-            <div className="glass-morphism px-6 py-3 rounded-2xl shadow-sm flex items-center gap-5">
-              <div className="text-right">
-                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">المستخدم الحالي</p>
-                <p className="text-sm font-bold text-slate-700">مدير النظام</p>
+            {!isOnline && (
+              <div className="flex items-center gap-2 px-4 py-2 bg-rose-500/10 text-rose-500 rounded-xl border border-rose-500/20 animate-pulse">
+                <WifiOff className="w-4 h-4" />
+                <span className="text-xs font-bold">أنت تعمل حالياً بدون اتصال</span>
               </div>
-              <div className="w-12 h-12 bg-slate-100 rounded-2xl flex items-center justify-center border border-slate-200 shadow-inner">
-                <Users className="w-6 h-6 text-slate-400" />
+            )}
+            <div className="glass-morphism px-6 py-3 rounded-2xl shadow-sm flex items-center gap-5">
+              <div className="flex flex-col items-end">
+                <span className="text-sm font-bold text-slate-900">{user.name}</span>
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                  {user.role === 'developer' ? 'مطور النظام' : 
+                   user.role === 'admin' ? 'مدير النظام' :
+                   user.role === 'editor' ? 'محرر بيانات' :
+                   user.role === 'data_collector' ? 'جامع بيانات' : 'باحث'}
+                </span>
+              </div>
+              <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center shadow-inner">
+                <User className="w-5 h-5" />
               </div>
             </div>
           </div>
@@ -152,7 +195,6 @@ export default function App() {
             {activeTab === 'new-case' && (
               <CaseForm onSuccess={(tab) => {
                 const target = tab || 'old-incomings';
-                console.log("CaseForm success, switching to:", target);
                 setActiveTab(target);
               }} />
             )}
@@ -162,7 +204,6 @@ export default function App() {
             {activeTab === 'case-detail' && selectedCaseId && (
               <CaseForm caseId={selectedCaseId} onSuccess={(tab) => {
                 const target = tab || 'old-incomings';
-                console.log("CaseForm detail success, switching to:", target);
                 setActiveTab(target);
               }} />
             )}
@@ -176,5 +217,13 @@ export default function App() {
         </AnimatePresence>
       </main>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }

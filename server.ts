@@ -3,8 +3,11 @@ import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 
 const db = new Database("inspection.db");
+const JWT_SECRET = process.env.JWT_SECRET || "super-secret-key-123";
 
 // Initialize Database Schema
 db.exec(`
@@ -151,6 +154,15 @@ db.exec(`
     FOREIGN KEY(case_id) REFERENCES cases(id)
   );
 
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password TEXT NOT NULL,
+    role TEXT NOT NULL, -- developer, admin, editor, data_collector, searcher
+    full_name TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS audit_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_name TEXT,
@@ -204,16 +216,74 @@ try { db.exec("ALTER TABLE cases ADD COLUMN case_status_v2 TEXT;"); } catch(e) {
 try { db.exec("ALTER TABLE cases ADD COLUMN case_status_detail TEXT;"); } catch(e) {}
 try { db.exec("ALTER TABLE cases ADD COLUMN trial_number TEXT;"); } catch(e) {}
 try { db.exec("ALTER TABLE cases ADD COLUMN trial_year TEXT;"); } catch(e) {}
+try { db.exec("ALTER TABLE prosecution_members ADD COLUMN is_active INTEGER DEFAULT 1;"); } catch(e) {}
+
+// Seed default users if none exist
+const userCount = db.prepare("SELECT COUNT(*) as count FROM users").get().count;
+if (userCount === 0) {
+  const salt = bcrypt.genSaltSync(10);
+  const users = [
+    { username: 'dev', password: 'dev', role: 'developer', name: 'المطور النظام' },
+    { username: 'admin', password: 'admin', role: 'admin', name: 'مدير النظام' },
+    { username: 'editor', password: 'editor', role: 'editor', name: 'محرر بيانات' },
+    { username: 'collector', password: 'collector', role: 'data_collector', name: 'جامع بيانات' },
+    { username: 'searcher', password: 'searcher', role: 'searcher', name: 'باحث' }
+  ];
+
+  const insertUser = db.prepare("INSERT INTO users (username, password, role, full_name) VALUES (?, ?, ?, ?)");
+  users.forEach(u => {
+    insertUser.run(u.username, bcrypt.hashSync(u.password, salt), u.role, u.name);
+  });
+}
 
 async function startServer() {
   const app = express();
   app.use(express.json());
   const PORT = 3000;
 
+  // Auth Middleware
+  const authenticate = (req: any, res: any, next: any) => {
+    const token = req.headers.authorization?.split(" ")[1];
+    if (!token) return res.status(401).json({ error: "Unauthorized" });
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      req.user = decoded;
+      next();
+    } catch (e) {
+      res.status(401).json({ error: "Invalid token" });
+    }
+  };
+
+  const authorize = (roles: string[]) => {
+    return (req: any, res: any, next: any) => {
+      if (!req.user || !roles.includes(req.user.role)) {
+        return res.status(403).json({ error: "Forbidden: Insufficient permissions" });
+      }
+      next();
+    };
+  };
+
+  // Auth Routes
+  app.post("/api/auth/login", (req, res) => {
+    const { username, password } = req.body;
+    const user = db.prepare("SELECT * FROM users WHERE username = ?").get(username);
+    
+    if (!user || !bcrypt.compareSync(password, user.password)) {
+      return res.status(401).json({ error: "اسم المستخدم أو كلمة المرور غير صحيحة" });
+    }
+
+    const token = jwt.sign({ id: user.id, username: user.username, role: user.role, name: user.full_name }, JWT_SECRET, { expiresIn: '24h' });
+    res.json({ token, user: { id: user.id, username: user.username, role: user.role, name: user.full_name } });
+  });
+
+  app.get("/api/auth/me", authenticate, (req: any, res) => {
+    res.json(req.user);
+  });
+
   // --- API Routes ---
 
   // Prosecution Offices (Formation) API
-  app.post("/api/prosecution-offices/sync", (req, res) => {
+  app.post("/api/prosecution-offices/sync", authenticate, authorize(['developer', 'admin']), (req, res) => {
     try {
       const transaction = db.transaction(() => {
         // Get distinct offices and counts from prosecution_members
@@ -249,7 +319,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/prosecution-offices", (req, res) => {
+  app.get("/api/prosecution-offices", authenticate, (req, res) => {
     try {
       const rows = db.prepare("SELECT * FROM prosecution_offices ORDER BY prosecution_name ASC").all();
       res.json(rows);
@@ -258,7 +328,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/prosecution-offices", (req, res) => {
+  app.post("/api/prosecution-offices", authenticate, authorize(['developer', 'admin']), (req, res) => {
     const { prosecution_name } = req.body;
     try {
       const transaction = db.transaction(() => {
@@ -280,7 +350,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/prosecution-offices/:name/members", (req, res) => {
+  app.get("/api/prosecution-offices/:name/members", authenticate, (req, res) => {
     try {
       const rows = db.prepare(`
         SELECT * FROM prosecution_members 
@@ -293,7 +363,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/prosecution-offices/all-formations", (req, res) => {
+  app.get("/api/prosecution-offices/all-formations", authenticate, (req, res) => {
     try {
       const offices = db.prepare("SELECT * FROM prosecution_offices ORDER BY prosecution_name ASC").all();
       const formations = offices.map(office => {
@@ -311,7 +381,7 @@ async function startServer() {
   });
 
   // Prosecution Members API
-  app.post("/api/system/clear-data", (req, res) => {
+  app.post("/api/system/clear-data", authenticate, authorize(['developer']), (req, res) => {
     try {
       const transaction = db.transaction(() => {
         db.prepare("DELETE FROM case_members").run();
@@ -330,15 +400,19 @@ async function startServer() {
     }
   });
 
-  app.get("/api/prosecution-members", (req, res) => {
-    const { search, page = 1, limit = 50 } = req.query;
+  app.get("/api/prosecution-members", authenticate, (req, res) => {
+    const { search, page = 1, limit = 50, include_inactive = 'false' } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
     
-    let query = "SELECT *, (SELECT COUNT(*) FROM prosecution_members) as total_count FROM prosecution_members";
+    let query = "SELECT *, (SELECT COUNT(*) FROM prosecution_members WHERE is_active = 1) as total_count FROM prosecution_members WHERE 1=1";
     const params: any[] = [];
 
+    if (include_inactive !== 'true') {
+      query += " AND is_active = 1";
+    }
+
     if (search) {
-      query += " WHERE name LIKE ? OR national_id LIKE ? OR grade LIKE ? OR prosecution_office LIKE ?";
+      query += " AND (name LIKE ? OR national_id LIKE ? OR grade LIKE ? OR prosecution_office LIKE ?)";
       const searchParam = `%${search}%`;
       params.push(searchParam, searchParam, searchParam, searchParam);
     }
@@ -354,7 +428,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/prosecution-members", (req, res) => {
+  app.post("/api/prosecution-members", authenticate, authorize(['developer', 'admin']), (req, res) => {
     const { name, grade, seniority, governorate, police_station, prosecution_office, national_id, phone1, phone2 } = req.body;
     
     const gradeOrders: Record<string, number> = {
@@ -551,16 +625,35 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/prosecution-members/:id", (req, res) => {
+  app.patch("/api/prosecution-members/:id", (req, res) => {
+    const id = req.params.id;
+    const updates = req.body;
+    const fields = Object.keys(updates);
+    if (fields.length === 0) return res.status(400).json({ error: "No fields to update" });
+
+    const setClause = fields.map(f => `${f} = ?`).join(", ");
+    const values = fields.map(f => updates[f]);
+    values.push(id);
+
     try {
-      db.prepare("DELETE FROM prosecution_members WHERE id = ?").run(req.params.id);
+      db.prepare(`UPDATE prosecution_members SET ${setClause} WHERE id = ?`).run(...values);
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.get("/api/prosecution-members/:id/full-history", (req, res) => {
+  app.delete("/api/prosecution-members/:id", authenticate, authorize(['developer', 'admin']), (req, res) => {
+    try {
+      // Soft delete: mark as inactive instead of removing
+      db.prepare("UPDATE prosecution_members SET is_active = 0 WHERE id = ?").run(req.params.id);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/prosecution-members/:id/full-history", authenticate, (req, res) => {
     try {
       const id = req.params.id;
       const history = db.prepare(`
@@ -595,7 +688,7 @@ async function startServer() {
   });
 
   // Members API
-  app.get("/api/members", (req, res) => {
+  app.get("/api/members", authenticate, (req, res) => {
     const search = req.query.search as string;
     let query = "SELECT id, name, grade as rank, prosecution_office FROM prosecution_members";
     let params: any[] = [];
@@ -608,7 +701,7 @@ async function startServer() {
     res.json(members);
   });
 
-  app.post("/api/members", (req, res) => {
+  app.post("/api/members", authenticate, authorize(['developer', 'admin']), (req, res) => {
     const { name, rank, prosecution_office } = req.body;
     const info = db.prepare("INSERT INTO members (name, rank, prosecution_office) VALUES (?, ?, ?)").run(name, rank, prosecution_office);
     
@@ -644,7 +737,7 @@ async function startServer() {
     res.json({ promotions, transfers });
   });
 
-  app.delete("/api/members/:id", (req, res) => {
+  app.delete("/api/members/:id", authenticate, authorize(['developer', 'admin']), (req, res) => {
     const id = req.params.id;
     const activeCases = db.prepare("SELECT COUNT(*) as count FROM case_members WHERE member_id = ?").get(id);
     if (activeCases.count > 0) {
@@ -655,7 +748,7 @@ async function startServer() {
   });
 
   // Cases API
-  app.get("/api/cases", (req, res) => {
+  app.get("/api/cases", authenticate, (req, res) => {
     const cases = db.prepare(`
       SELECT c.*, 
              p.name as prosecution_name
@@ -718,7 +811,7 @@ async function startServer() {
     });
   });
 
-  app.post("/api/cases", (req, res) => {
+  app.post("/api/cases", authenticate, authorize(['developer', 'admin', 'editor', 'data_collector']), (req, res) => {
     console.log("POST /api/cases", req.body);
     const { 
       incoming_number, incoming_date, complainant, complainant_id_number, 
@@ -793,7 +886,7 @@ async function startServer() {
       }
 
       db.prepare("INSERT INTO audit_logs (user_name, action, table_name, record_id, new_values) VALUES (?, ?, ?, ?, ?)").run(
-        "System", "CREATE", "cases", caseId, JSON.stringify(req.body)
+        (req as any).user?.name || "System", "CREATE", "cases", caseId, JSON.stringify(req.body)
       );
 
       // Sync reports and objections
@@ -865,7 +958,7 @@ async function startServer() {
     }
   });
 
-  app.patch("/api/cases/:id", (req, res) => {
+  app.patch("/api/cases/:id", authenticate, authorize(['developer', 'admin', 'editor']), (req, res) => {
     const { status, current_stage, member_ids, inspection_data, ...updates } = req.body;
     const id = req.params.id;
 
@@ -981,7 +1074,7 @@ async function startServer() {
       }
 
       db.prepare("INSERT INTO audit_logs (user_name, action, table_name, record_id, old_values, new_values) VALUES (?, ?, ?, ?, ?, ?)").run(
-        "System", "UPDATE", "cases", id, JSON.stringify(oldData), JSON.stringify(req.body)
+        (req as any).user?.name || "System", "UPDATE", "cases", id, JSON.stringify(oldData), JSON.stringify(req.body)
       );
       syncReports(db);
 
@@ -1046,7 +1139,7 @@ async function startServer() {
   });
 
   // Inspections API
-  app.get("/api/inspections/next-number", (req, res) => {
+  app.get("/api/inspections/next-number", authenticate, (req, res) => {
     const year = req.query.year || new Date().getFullYear().toString();
     try {
       const row = db.prepare("SELECT MAX(CAST(inspection_number AS INTEGER)) as max_num FROM inspections WHERE year = ?").get(year);
@@ -1057,7 +1150,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/inspections", (req, res) => {
+  app.post("/api/inspections", authenticate, authorize(['developer', 'admin', 'editor']), (req, res) => {
     const { case_id, inspection_number, year, referral_date, inspector_id, result, details } = req.body;
     const sanitized_inspector_id = (inspector_id && inspector_id !== 0 && inspector_id !== "0") ? inspector_id : null;
     
@@ -1082,7 +1175,7 @@ async function startServer() {
         }
         
         db.prepare("INSERT INTO audit_logs (user_name, action, table_name, record_id, new_values) VALUES (?, ?, ?, ?, ?)").run(
-          "System", "CREATE", "inspections", case_id, JSON.stringify(req.body)
+          (req as any).user?.name || "System", "CREATE", "inspections", case_id, JSON.stringify(req.body)
         );
         
         syncReports(db);
@@ -1127,7 +1220,7 @@ async function startServer() {
     }
   });
 
-  app.patch("/api/inspections/:id", (req, res) => {
+  app.patch("/api/inspections/:id", authenticate, authorize(['developer', 'admin', 'editor']), (req, res) => {
     const { is_closed, result, details } = req.body;
     const id = req.params.id;
     
@@ -1198,7 +1291,7 @@ async function startServer() {
   });
 
   // Investigations API
-  app.get("/api/investigations/next-number", (req, res) => {
+  app.get("/api/investigations/next-number", authenticate, (req, res) => {
     const year = req.query.year || new Date().getFullYear().toString();
     try {
       const row = db.prepare("SELECT MAX(CAST(investigation_number AS INTEGER)) as max_num FROM investigations WHERE year = ?").get(year);
@@ -1209,7 +1302,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/objections/next-number", (req, res) => {
+  app.get("/api/objections/next-number", authenticate, (req, res) => {
     const year = req.query.year || new Date().getFullYear().toString();
     try {
       const row = db.prepare("SELECT MAX(CAST(objection_number AS INTEGER)) as max_num FROM objections WHERE year = ?").get(year);
@@ -1220,7 +1313,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/investigations", (req, res) => {
+  app.post("/api/investigations", authenticate, authorize(['developer', 'admin', 'editor']), (req, res) => {
     const { case_id, investigation_number, year, type, subject, investigator_id, referral_authority, referral_details } = req.body;
     try {
       const transaction = db.transaction(() => {
@@ -1249,7 +1342,7 @@ async function startServer() {
         }
         
         db.prepare("INSERT INTO audit_logs (user_name, action, table_name, record_id, new_values) VALUES (?, ?, ?, ?, ?)").run(
-          "System", "CREATE", "investigations", case_id, JSON.stringify(req.body)
+          (req as any).user?.name || "System", "CREATE", "investigations", case_id, JSON.stringify(req.body)
         );
         
         syncReports(db);
@@ -1315,7 +1408,7 @@ async function startServer() {
     }
   });
 
-  app.patch("/api/investigations/:id", (req, res) => {
+  app.patch("/api/investigations/:id", authenticate, authorize(['developer', 'admin', 'editor']), (req, res) => {
     const { is_closed, result, referral_details, investigation_number, year } = req.body;
     const id = req.params.id;
     
@@ -1421,7 +1514,7 @@ async function startServer() {
   });
 
   // Disciplinary Councils API
-  app.post("/api/councils", (req, res) => {
+  app.post("/api/councils", authenticate, authorize(['developer', 'admin', 'editor']), (req, res) => {
     const { case_id, type, details, result } = req.body;
     try {
       const info = db.prepare(`
@@ -1438,18 +1531,18 @@ async function startServer() {
   });
 
   // Prosecutions API
-  app.get("/api/prosecutions", (req, res) => {
+  app.get("/api/prosecutions", authenticate, (req, res) => {
     const prosecutions = db.prepare("SELECT * FROM prosecutions ORDER BY name ASC").all();
     res.json(prosecutions);
   });
 
-  app.post("/api/prosecutions", (req, res) => {
+  app.post("/api/prosecutions", authenticate, authorize(['developer', 'admin']), (req, res) => {
     const { name } = req.body;
     const info = db.prepare("INSERT INTO prosecutions (name) VALUES (?)").run(name);
     res.json({ id: info.lastInsertRowid });
   });
 
-  app.delete("/api/prosecutions/:id", (req, res) => {
+  app.delete("/api/prosecutions/:id", authenticate, authorize(['developer', 'admin']), (req, res) => {
     const id = req.params.id;
     const linkedCases = db.prepare("SELECT COUNT(*) as count FROM cases WHERE prosecution_id = ?").get(id);
     if (linkedCases.count > 0) {
@@ -1460,13 +1553,13 @@ async function startServer() {
   });
 
   // Audit Logs
-  app.get("/api/audit/all", (req, res) => {
+  app.get("/api/audit/all", authenticate, authorize(['developer']), (req, res) => {
     const logs = db.prepare("SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT 100").all();
     res.json(logs);
   });
 
   // Reports and Statistics API
-  app.post("/api/reports/sync", (req, res) => {
+  app.post("/api/reports/sync", authenticate, authorize(['developer', 'admin']), (req, res) => {
     try {
       syncReports(db);
       res.json({ success: true });
@@ -1475,7 +1568,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/reports/summary", (req, res) => {
+  app.get("/api/reports/summary", authenticate, (req, res) => {
     try {
       const statusCounts = db.prepare(`
         SELECT 
@@ -1504,22 +1597,39 @@ async function startServer() {
     }
   });
 
-  app.get("/api/reports/member-stats", (req, res) => {
+  app.get("/api/reports/member-stats", authenticate, (req, res) => {
     try {
+      // This query now includes:
+      // 1. Current members of the Inspection department
+      // 2. Former members (inactive or transferred) who have tasks in reports_tracking
       const stats = db.prepare(`
         SELECT 
-          m.name as member_name,
-          m.grade,
-          m.seniority,
+          COALESCE(m.name, t.member_name) as member_name,
+          COALESCE(m.grade, 'عضو سابق/منقول') as grade,
+          COALESCE(m.seniority, 999) as seniority,
+          m.grade_order,
+          COALESCE(m.is_active, 0) as is_active,
           COUNT(CASE WHEN t.task_type = 'فحص' THEN 1 END) as total_inspections,
           COUNT(CASE WHEN t.task_type = 'تحقيق' THEN 1 END) as total_investigations,
           COUNT(CASE WHEN t.task_type = 'فحص' AND t.task_status = 'منتهي' THEN 1 END) as finished_inspections,
           COUNT(CASE WHEN t.task_type = 'تحقيق' AND t.task_status = 'منتهي' THEN 1 END) as finished_investigations
-        FROM prosecution_members m
-        LEFT JOIN reports_tracking t ON m.name = t.member_name
-        WHERE m.prosecution_office LIKE '%التفتيش%'
-        GROUP BY m.name
-        ORDER BY m.grade_order ASC, m.seniority ASC
+        FROM (
+          -- Get all members currently in inspection
+          SELECT name, grade, seniority, grade_order 
+          FROM prosecution_members 
+          WHERE prosecution_office LIKE '%التفتيش%' AND is_active = 1
+          
+          UNION
+          
+          -- Plus any member who has a task in tracking (even if transferred or inactive)
+          SELECT DISTINCT member_name as name, NULL as grade, NULL as seniority, NULL as grade_order
+          FROM reports_tracking
+        ) m_base
+        LEFT JOIN prosecution_members m ON m_base.name = m.name
+        LEFT JOIN reports_tracking t ON m_base.name = t.member_name
+        GROUP BY m_base.name
+        HAVING total_inspections > 0 OR total_investigations > 0 OR (m.prosecution_office LIKE '%التفتيش%' AND m.is_active = 1)
+        ORDER BY COALESCE(m.grade_order, 999) ASC, COALESCE(m.seniority, 999) ASC
       `).all();
       res.json(stats);
     } catch (e: any) {
@@ -1527,7 +1637,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/reports/member/:name/details", (req, res) => {
+  app.get("/api/reports/member/:name/details", authenticate, (req, res) => {
     try {
       const name = req.params.name;
       const inspections = db.prepare("SELECT * FROM reports_tracking WHERE member_name = ? AND task_type = 'فحص'").all(name);
@@ -1541,7 +1651,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/audit/:caseId", (req, res) => {
+  app.get("/api/audit/:caseId", authenticate, (req, res) => {
     const logs = db.prepare("SELECT * FROM audit_logs WHERE record_id = ? AND table_name = 'cases' ORDER BY timestamp DESC").all(req.params.caseId);
     res.json(logs);
   });
