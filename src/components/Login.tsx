@@ -29,7 +29,7 @@ export default function Login() {
           <div className="inline-flex items-center justify-center w-20 h-20 bg-primary/10 rounded-3xl mb-6 shadow-xl shadow-primary/5">
             <Shield className="w-10 h-10 text-primary" />
           </div>
-          <h1 className="text-3xl font-black text-slate-900 mb-2 tracking-tight">منظومة المكتب الفني</h1>
+          <h1 className="text-3xl font-black text-slate-900 mb-2 tracking-tight line-clamp-2">دورة عمل الفحص - التفتيش القضائي - النيابة الادارية</h1>
           <p className="text-slate-500 font-medium">تسجيل الدخول للمتابعة</p>
         </div>
 
@@ -91,7 +91,7 @@ export default function Login() {
         </div>
 
         <p className="text-center mt-8 text-slate-400 text-sm font-medium">
-          جميع الحقوق محفوظة &copy; {new Date().getFullYear()} المكتب الفني
+          جميع الحقوق محفوظة &copy; {new Date().getFullYear()} النيابة الإدارية
         </p>
       </div>
     </div>

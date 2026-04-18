@@ -100,7 +100,7 @@ function AppContent() {
                 <ShieldCheck className="w-7 h-7" />
               </div>
               <div>
-                <h1 className="font-display font-bold text-xl leading-tight tracking-tight text-white">التفتيش القضائي</h1>
+                <h1 className="font-display font-bold text-lg leading-tight tracking-tight text-white line-clamp-2">الفحص والتفتيش القضائي</h1>
                 <p className="text-[10px] text-slate-400 uppercase tracking-[0.2em] font-bold mt-0.5">النيابة الإدارية</p>
               </div>
             </motion.div>

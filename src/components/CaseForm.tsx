@@ -2943,7 +2943,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
               </button>
             )}
 
-            {!isReadOnly && ['منتهي فحص', 'منتهي تحقيق', 'منتهي محاكمة'].includes(watch('case_status_v2') || '') && currentCase?.status !== 'finished' && currentCase?.status !== 'closed' && (
+            {!isReadOnly && ['منتهي فحص', 'منتهي تحقيق', 'منتهي محاكمة'].includes(watch('case_status_v2') || '') && (currentCase?.status as any) !== 'finished' && (currentCase?.status as any) !== 'closed' && (
               <button 
                 type="button"
                 onClick={() => handleSave(true)}
@@ -2955,7 +2955,7 @@ export default function CaseForm({ caseId, onSuccess }: CaseFormProps) {
               </button>
             )}
 
-             {!isReadOnly && currentCase?.status !== 'closed' && (
+             {!isReadOnly && (currentCase?.status as any) !== 'closed' && (
                <button 
                 type="button"
                 onClick={() => handleSave(false)}

@@ -80,7 +80,7 @@ export default function Dashboard({ onCaseSelect }: DashboardProps) {
       'رقم الوارد': res.incoming_number,
       'تاريخ الوارد': res.incoming_date,
       'الشاكي': res.complainant || 'غير محدد',
-      'المشكو في حقه': res.member_name || 'غير محدد',
+      'المشكو في حقه': res.member?.name || 'غير محدد',
       'الموضوع': res.subject,
       'حالة الوارد': getDescriptiveStatus(res),
       'رقم الفحص': res.inspection?.inspection_number || '',
