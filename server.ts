@@ -453,20 +453,17 @@ async function startServer() {
   app.post("/api/system/clear-data", authenticate, authorize(['developer', 'admin']), (req, res) => {
     try {
       const transaction = db.transaction(() => {
-        db.prepare("DELETE FROM case_members").run();
-        db.prepare("DELETE FROM inspections").run();
-        db.prepare("DELETE FROM investigations").run();
-        db.prepare("DELETE FROM objections").run();
-        db.prepare("DELETE FROM disciplinary_councils").run();
-        db.prepare("DELETE FROM audit_logs").run();
-        db.prepare("DELETE FROM reports_tracking").run();
-        db.prepare("DELETE FROM cases").run();
-        db.prepare("DELETE FROM members").run();
-        db.prepare("DELETE FROM promotions").run();
-        db.prepare("DELETE FROM transfers").run();
-        db.prepare("DELETE FROM prosecution_offices").run();
-        db.prepare("DELETE FROM prosecution_members").run();
-        db.prepare("DELETE FROM prosecutions").run();
+        const tables = [
+          'case_members', 'inspections', 'investigations', 'objections', 
+          'disciplinary_councils', 'audit_logs', 'reports_tracking', 'cases',
+          'promotions', 'transfers', 'members', 'prosecution_offices', 
+          'prosecution_members', 'prosecutions'
+        ];
+        tables.forEach(table => {
+          try {
+            db.prepare(`DELETE FROM ${table}`).run();
+          } catch(e) {}
+        });
       });
       transaction();
       res.json({ success: true });
@@ -478,10 +475,10 @@ async function startServer() {
   app.get("/api/system/export-db", authenticate, authorize(['developer', 'admin']), (req, res) => {
     try {
         const tables = [
-            'cases', 'prosecution_members', 'prosecution_offices', 
+            'cases', 'case_members', 'prosecution_members', 'prosecution_offices', 
             'inspections', 'investigations', 'objections', 
             'disciplinary_councils', 'audit_logs', 'members',
-            'promotions', 'transfers', 'reports_tracking', 'prosecutions'
+            'promotions', 'transfers', 'reports_tracking', 'prosecutions', 'users'
         ];
         const data: any = {};
         for (const table of tables) {
@@ -506,22 +503,22 @@ async function startServer() {
           'case_members', 'inspections', 'investigations', 'objections', 
           'disciplinary_councils', 'audit_logs', 'reports_tracking', 'cases',
           'promotions', 'transfers', 'members', 'prosecution_offices', 
-          'prosecution_members', 'prosecutions'
+          'prosecution_members', 'prosecutions', 'users'
         ];
         
-        tables.forEach(table => db.prepare(`DELETE FROM ${table}`).run());
+        tables.forEach(table => {
+          try {
+            db.prepare(`DELETE FROM ${table}`).run();
+          } catch(e) {}
+        });
 
         for (const table of tables) {
-          if (Array.isArray(data[table]) && data[table].length > 0) {
+          if (data[table] && Array.isArray(data[table]) && data[table].length > 0) {
             const columns = Object.keys(data[table][0]);
             const placeholders = columns.map(() => "?").join(", ");
             const stmt = db.prepare(`INSERT INTO ${table} (${columns.join(", ")}) VALUES (${placeholders})`);
             for (const row of data[table]) {
-              const values = columns.map(col => {
-                const val = row[col];
-                // Handle JSON strings if necessary, though sqlite stores them as strings
-                return val;
-              });
+              const values = columns.map(col => row[col]);
               stmt.run(...values);
             }
           }
