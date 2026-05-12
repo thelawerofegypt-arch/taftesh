@@ -7,8 +7,6 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
 const db = new Database("inspection.db");
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
 const JWT_SECRET = process.env.JWT_SECRET || "super-secret-key-123";
 
 // Initialize Database Schema
@@ -210,67 +208,15 @@ db.exec(`
 `);
 
 // Add missing columns if they don't exist
-const columnsToAdd = [
-  { table: 'cases', column: 'examiner_id', type: 'INTEGER' },
-  { table: 'cases', column: 'examiner_decision', type: 'TEXT' },
-  { table: 'cases', column: 'reopen_reason', type: 'TEXT' },
-  { table: 'cases', column: 'reopened_by', type: 'TEXT' },
-  { table: 'cases', column: 'case_status_v2', type: 'TEXT' },
-  { table: 'cases', column: 'case_status_detail', type: 'TEXT' },
-  { table: 'cases', column: 'trial_number', type: 'TEXT' },
-  { table: 'cases', column: 'trial_year', type: 'TEXT' },
-  { table: 'prosecution_members', column: 'is_active', type: 'INTEGER DEFAULT 1' }
-];
-
-columnsToAdd.forEach(({ table, column, type }) => {
-  const info = db.prepare(`PRAGMA table_info(${table})`).all();
-  if (!info.some((c: any) => c.name === column)) {
-    try {
-      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type};`);
-    } catch (e) {
-      console.error(`Failed to add column ${column} to ${table}:`, e);
-    }
-  }
-});
-
-// Startup Sync Logic
-function syncDatabase() {
-  console.log("Starting database self-healing sync...");
-  try {
-    db.transaction(() => {
-      // 1. Sync Prosecution Offices
-      const offices = db.prepare(`
-        SELECT prosecution_office, COUNT(*) as count 
-        FROM prosecution_members 
-        WHERE prosecution_office IS NOT NULL AND prosecution_office != ''
-        GROUP BY prosecution_office
-      `).all();
-
-      const insertOffice = db.prepare(`
-        INSERT INTO prosecution_offices (prosecution_name, members_count, last_updated)
-        VALUES (?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(prosecution_name) DO UPDATE SET
-          members_count = excluded.members_count,
-          last_updated = CURRENT_TIMESTAMP
-      `);
-
-      const insertProsecution = db.prepare(`
-        INSERT OR IGNORE INTO prosecutions (name) VALUES (?)
-      `);
-
-      for (const office of offices) {
-        insertOffice.run(office.prosecution_office, office.count);
-        insertProsecution.run(office.prosecution_office);
-      }
-
-      console.log(`Synced ${offices.length} prosecution offices.`);
-    })();
-  } catch (e) {
-    console.error("Startup sync failed:", e);
-  }
-}
-
-syncDatabase();
+try { db.exec("ALTER TABLE cases ADD COLUMN examiner_id INTEGER;"); } catch(e) {}
+try { db.exec("ALTER TABLE cases ADD COLUMN examiner_decision TEXT;"); } catch(e) {}
+try { db.exec("ALTER TABLE cases ADD COLUMN reopen_reason TEXT;"); } catch(e) {}
+try { db.exec("ALTER TABLE cases ADD COLUMN reopened_by TEXT;"); } catch(e) {}
+try { db.exec("ALTER TABLE cases ADD COLUMN case_status_v2 TEXT;"); } catch(e) {}
+try { db.exec("ALTER TABLE cases ADD COLUMN case_status_detail TEXT;"); } catch(e) {}
+try { db.exec("ALTER TABLE cases ADD COLUMN trial_number TEXT;"); } catch(e) {}
+try { db.exec("ALTER TABLE cases ADD COLUMN trial_year TEXT;"); } catch(e) {}
+try { db.exec("ALTER TABLE prosecution_members ADD COLUMN is_active INTEGER DEFAULT 1;"); } catch(e) {}
 
 // Seed default users if none exist
 const userCount = db.prepare("SELECT COUNT(*) as count FROM users").get().count;
@@ -756,57 +702,49 @@ async function startServer() {
   });
 
   app.post("/api/members", authenticate, authorize(['developer', 'admin']), (req, res) => {
-    const { name, rank, prosecution_office, national_id, seniority, grade_order } = req.body;
-    try {
-      const info = db.prepare(`
-        INSERT INTO prosecution_members (name, grade, prosecution_office, national_id, seniority, grade_order) 
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(name, rank, prosecution_office, national_id || '00000000000000', seniority || 999, grade_order || 99);
-      
-      res.json({ id: info.lastInsertRowid });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
+    const { name, rank, prosecution_office } = req.body;
+    const info = db.prepare("INSERT INTO members (name, rank, prosecution_office) VALUES (?, ?, ?)").run(name, rank, prosecution_office);
+    
+    // Initial history
+    db.prepare("INSERT INTO promotions (member_id, new_rank, promotion_date) VALUES (?, ?, ?)").run(info.lastInsertRowid, rank, new Date().toISOString().split('T')[0]);
+    db.prepare("INSERT INTO transfers (member_id, new_office, transfer_date) VALUES (?, ?, ?)").run(info.lastInsertRowid, prosecution_office, new Date().toISOString().split('T')[0]);
+    
+    res.json({ id: info.lastInsertRowid });
   });
 
-  app.patch("/api/members/:id", authenticate, authorize(['developer', 'admin']), (req, res) => {
-    const { id } = req.params;
-    const { name, rank, prosecution_office, is_active } = req.body;
-    try {
-      const oldMember = db.prepare("SELECT * FROM prosecution_members WHERE id = ?").get(id);
-      if (!oldMember) return res.status(404).json({ error: "Member not found" });
+  app.patch("/api/members/:id", (req, res) => {
+    const { rank, prosecution_office } = req.body;
+    const id = req.params.id;
+    const oldMember = db.prepare("SELECT * FROM members WHERE id = ?").get(id);
 
-      if (rank) {
-        db.prepare("UPDATE prosecution_members SET grade = ? WHERE id = ?").run(rank, id);
-      }
-      if (prosecution_office) {
-        db.prepare("UPDATE prosecution_members SET prosecution_office = ? WHERE id = ?").run(prosecution_office, id);
-      }
-      if (name) {
-        db.prepare("UPDATE prosecution_members SET name = ? WHERE id = ?").run(name, id);
-      }
-      if (is_active !== undefined) {
-        db.prepare("UPDATE prosecution_members SET is_active = ? WHERE id = ?").run(is_active ? 1 : 0, id);
-      }
-      
-      res.json({ success: true });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
+    if (rank && rank !== oldMember.rank) {
+      db.prepare("UPDATE members SET rank = ? WHERE id = ?").run(rank, id);
+      db.prepare("INSERT INTO promotions (member_id, old_rank, new_rank, promotion_date) VALUES (?, ?, ?, ?)").run(id, oldMember.rank, rank, new Date().toISOString().split('T')[0]);
     }
+
+    if (prosecution_office && prosecution_office !== oldMember.prosecution_office) {
+      db.prepare("UPDATE members SET prosecution_office = ? WHERE id = ?").run(prosecution_office, id);
+      db.prepare("INSERT INTO transfers (member_id, old_office, new_office, transfer_date) VALUES (?, ?, ?, ?)").run(id, oldMember.prosecution_office, prosecution_office, new Date().toISOString().split('T')[0]);
+    }
+
+    res.json({ success: true });
+  });
+
+  app.get("/api/members/:id/history", (req, res) => {
+    const id = req.params.id;
+    const promotions = db.prepare("SELECT * FROM promotions WHERE member_id = ? ORDER BY promotion_date DESC").all(id);
+    const transfers = db.prepare("SELECT * FROM transfers WHERE member_id = ? ORDER BY transfer_date DESC").all(id);
+    res.json({ promotions, transfers });
   });
 
   app.delete("/api/members/:id", authenticate, authorize(['developer', 'admin']), (req, res) => {
-    const { id } = req.params;
-    try {
-      const activeCases = db.prepare("SELECT COUNT(*) as count FROM case_members WHERE member_id = ?").get(id);
-      if (activeCases.count > 0) {
-        return res.status(400).json({ error: "لا يمكن حذف عضو مرتبط بملفات نشطة في النظام" });
-      }
-      db.prepare("UPDATE prosecution_members SET is_active = 0 WHERE id = ?").run(id);
-      res.json({ success: true });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
+    const id = req.params.id;
+    const activeCases = db.prepare("SELECT COUNT(*) as count FROM case_members WHERE member_id = ?").get(id);
+    if (activeCases.count > 0) {
+      return res.status(400).json({ error: "لا يمكن حذف عضو مرتبط بملفات نشطة في النظام" });
     }
+    db.prepare("DELETE FROM members WHERE id = ?").run(id);
+    res.json({ success: true });
   });
 
   // Cases API
