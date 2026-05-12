@@ -17,8 +17,8 @@ export default defineConfig(({mode}) => {
         registerType: 'autoUpdate',
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
         manifest: {
-          name: 'دورة عمل التفتيش القضائي',
-          short_name: 'التفتيش القضائي',
+          name: 'دورة عمل الفحص - التفتيش القضائي - النيابة الادارية',
+          short_name: 'الفحص والتفتيش',
           description: 'نظام إدارة دورة عمل التفتيش القضائي بالنيابة الإدارية',
           theme_color: '#4F46E5',
           background_color: '#0F172A',
@@ -26,19 +26,17 @@ export default defineConfig(({mode}) => {
           start_url: '/',
           icons: [
             {
-              src: '/icon-.png',
+              src: 'https://picsum.photos/192/192',
               sizes: '192x192',
-              type: 'image/png',
-              "purpose": "any maskable"
+              type: 'image/png'
             },
             {
-              src: '/icon-.png',
+              src: 'https://picsum.photos/512/512',
               sizes: '512x512',
-              type: 'image/png',
-              "purpose": "any maskable"
+              type: 'image/png'
             },
             {
-              src: '/icon-.png',
+              src: 'https://picsum.photos/512/512',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'any maskable'
@@ -87,12 +85,14 @@ export default defineConfig(({mode}) => {
       },
     },
     server: {
-     proxy: {
-      '/api': {
-        target: 'http://localhost:3000',
-        changeOrigin: true,
+      proxy: {
+        '/api': {
+          target: 'http://localhost:3000',
+          changeOrigin: true,
+        },
       },
-     },
+      // HMR is disabled in AI Studio via DISABLE_HMR env var.
+      // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
     },
   };

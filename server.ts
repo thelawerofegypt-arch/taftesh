@@ -381,7 +381,7 @@ async function startServer() {
   });
 
   // Prosecution Members API
-  app.post("/api/system/clear-data", authenticate, authorize(['developer']), (req, res) => {
+  app.post("/api/system/clear-data", authenticate, authorize(['developer', 'admin']), (req, res) => {
     try {
       const transaction = db.transaction(() => {
         db.prepare("DELETE FROM case_members").run();
@@ -392,6 +392,71 @@ async function startServer() {
         db.prepare("DELETE FROM audit_logs").run();
         db.prepare("DELETE FROM reports_tracking").run();
         db.prepare("DELETE FROM cases").run();
+        db.prepare("DELETE FROM members").run();
+        db.prepare("DELETE FROM promotions").run();
+        db.prepare("DELETE FROM transfers").run();
+        db.prepare("DELETE FROM prosecution_offices").run();
+        db.prepare("DELETE FROM prosecution_members").run();
+        db.prepare("DELETE FROM prosecutions").run();
+      });
+      transaction();
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/system/export-db", authenticate, authorize(['developer', 'admin']), (req, res) => {
+    try {
+        const tables = [
+            'cases', 'prosecution_members', 'prosecution_offices', 
+            'inspections', 'investigations', 'objections', 
+            'disciplinary_councils', 'audit_logs', 'members',
+            'promotions', 'transfers', 'reports_tracking', 'prosecutions'
+        ];
+        const data: any = {};
+        for (const table of tables) {
+            try {
+              data[table] = db.prepare(`SELECT * FROM ${table}`).all();
+            } catch (err) {
+              data[table] = []; // Table might not exist or be empty
+            }
+        }
+        res.json(data);
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/system/import-db", authenticate, authorize(['developer', 'admin']), (req, res) => {
+    const data = req.body;
+    try {
+      const transaction = db.transaction(() => {
+        // Order matters for foreign keys if enforced, but let's just clear and insert
+        const tables = [
+          'case_members', 'inspections', 'investigations', 'objections', 
+          'disciplinary_councils', 'audit_logs', 'reports_tracking', 'cases',
+          'promotions', 'transfers', 'members', 'prosecution_offices', 
+          'prosecution_members', 'prosecutions'
+        ];
+        
+        tables.forEach(table => db.prepare(`DELETE FROM ${table}`).run());
+
+        for (const table of tables) {
+          if (Array.isArray(data[table]) && data[table].length > 0) {
+            const columns = Object.keys(data[table][0]);
+            const placeholders = columns.map(() => "?").join(", ");
+            const stmt = db.prepare(`INSERT INTO ${table} (${columns.join(", ")}) VALUES (${placeholders})`);
+            for (const row of data[table]) {
+              const values = columns.map(col => {
+                const val = row[col];
+                // Handle JSON strings if necessary, though sqlite stores them as strings
+                return val;
+              });
+              stmt.run(...values);
+            }
+          }
+        }
       });
       transaction();
       res.json({ success: true });
