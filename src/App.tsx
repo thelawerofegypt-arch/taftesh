@@ -18,7 +18,8 @@ import {
   CheckCircle2,
   BarChart3,
   WifiOff,
-  User
+  User,
+  Lock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import CaseForm from './components/CaseForm';
@@ -30,6 +31,8 @@ import ProsecutionManagement from './components/ProsecutionManagement';
 import ReportsAndStatistics from './components/ReportsAndStatistics';
 import CaseList from './components/CaseList';
 import SystemManagement from './components/SystemManagement';
+import UserManagement from './components/UserManagement';
+import ChangePassword from './components/ChangePassword';
 import Login from './components/Login';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Case } from './types';
@@ -72,8 +75,10 @@ function AppContent() {
     { id: 'members', label: 'أعضاء النيابة', icon: Users, roles: ['developer', 'admin'] },
     { id: 'prosecutions', label: 'تشكيل النيابات', icon: Database, roles: ['developer', 'admin'] },
     { id: 'reports', label: 'التقارير والإحصائيات', icon: BarChart3, roles: ['developer', 'admin', 'editor', 'data_collector', 'searcher'] },
+    { id: 'users-manage', label: 'إدارة المستخدمين', icon: Users, roles: ['developer', 'admin'] },
+    { id: 'change-password', label: 'تغيير كلمة المرور', icon: Lock, roles: ['developer', 'admin', 'editor', 'data_collector', 'searcher'] },
     { id: 'audit', label: 'سجل العمليات', icon: History, roles: ['developer'] },
-    { id: 'system', label: 'إدارة النظام', icon: Settings, roles: ['developer'] },
+    { id: 'system', label: 'إدارة النظام', icon: Settings, roles: ['developer', 'admin'] },
   ].filter(item => item.roles.includes(user.role));
 
   const handleCaseSelect = (id: number) => {
@@ -168,7 +173,7 @@ function AppContent() {
             )}
             <div className="glass-morphism px-6 py-3 rounded-2xl shadow-sm flex items-center gap-5">
               <div className="flex flex-col items-end">
-                <span className="text-sm font-bold text-slate-900">{user.name}</span>
+                <span className="text-sm font-bold text-slate-900">{user.username}</span>
                 <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
                   {user.role === 'developer' ? 'مطور النظام' : 
                    user.role === 'admin' ? 'مدير النظام' :
@@ -211,6 +216,8 @@ function AppContent() {
             {activeTab === 'prosecutions' && <ProsecutionManagement />}
             {activeTab === 'reports' && <ReportsAndStatistics />}
             {activeTab === 'search' && <AdvancedSearch onCaseSelect={handleCaseSelect} />}
+            {activeTab === 'users-manage' && <UserManagement />}
+            {activeTab === 'change-password' && <ChangePassword />}
             {activeTab === 'audit' && <AuditLogView />}
             {activeTab === 'system' && <SystemManagement />}
           </motion.div>

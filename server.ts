@@ -156,10 +156,10 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE NOT NULL,
+    login_name TEXT UNIQUE NOT NULL,
+    username TEXT NOT NULL,
     password TEXT NOT NULL,
     role TEXT NOT NULL, -- developer, admin, editor, data_collector, searcher
-    full_name TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
@@ -208,6 +208,10 @@ db.exec(`
 `);
 
 // Add missing columns if they don't exist
+try { db.exec("ALTER TABLE users RENAME COLUMN username TO login_name;"); } catch(e) {}
+try { db.exec("ALTER TABLE users ADD COLUMN username TEXT;"); } catch(e) {}
+try { db.exec("UPDATE users SET username = full_name WHERE username IS NULL;"); } catch(e) {}
+try { db.exec("ALTER TABLE users DROP COLUMN full_name;"); } catch(e) {}
 try { db.exec("ALTER TABLE cases ADD COLUMN examiner_id INTEGER;"); } catch(e) {}
 try { db.exec("ALTER TABLE cases ADD COLUMN examiner_decision TEXT;"); } catch(e) {}
 try { db.exec("ALTER TABLE cases ADD COLUMN reopen_reason TEXT;"); } catch(e) {}
@@ -223,16 +227,16 @@ const userCount = db.prepare("SELECT COUNT(*) as count FROM users").get().count;
 if (userCount === 0) {
   const salt = bcrypt.genSaltSync(10);
   const users = [
-    { username: 'dev', password: 'dev', role: 'developer', name: 'المطور النظام' },
-    { username: 'admin', password: 'admin', role: 'admin', name: 'مدير النظام' },
-    { username: 'editor', password: 'editor', role: 'editor', name: 'محرر بيانات' },
-    { username: 'collector', password: 'collector', role: 'data_collector', name: 'جامع بيانات' },
-    { username: 'searcher', password: 'searcher', role: 'searcher', name: 'باحث' }
+    { login_name: 'dev', password: 'dev', role: 'developer', username: 'المطور النظام' },
+    { login_name: 'admin', password: 'admin', role: 'admin', username: 'مدير النظام' },
+    { login_name: 'editor', password: 'editor', role: 'editor', username: 'محرر بيانات' },
+    { login_name: 'collector', password: 'collector', role: 'data_collector', username: 'جامع بيانات' },
+    { login_name: 'searcher', password: 'searcher', role: 'searcher', username: 'باحث' }
   ];
 
-  const insertUser = db.prepare("INSERT INTO users (username, password, role, full_name) VALUES (?, ?, ?, ?)");
+  const insertUser = db.prepare("INSERT INTO users (login_name, password, role, username) VALUES (?, ?, ?, ?)");
   users.forEach(u => {
-    insertUser.run(u.username, bcrypt.hashSync(u.password, salt), u.role, u.name);
+    insertUser.run(u.login_name, bcrypt.hashSync(u.password, salt), u.role, u.username);
   });
 }
 
@@ -265,19 +269,84 @@ async function startServer() {
 
   // Auth Routes
   app.post("/api/auth/login", (req, res) => {
-    const { username, password } = req.body;
-    const user = db.prepare("SELECT * FROM users WHERE username = ?").get(username);
+    const { login_name, password } = req.body;
+    const user = db.prepare("SELECT * FROM users WHERE login_name = ?").get(login_name);
     
     if (!user || !bcrypt.compareSync(password, user.password)) {
       return res.status(401).json({ error: "اسم المستخدم أو كلمة المرور غير صحيحة" });
     }
 
-    const token = jwt.sign({ id: user.id, username: user.username, role: user.role, name: user.full_name }, JWT_SECRET, { expiresIn: '24h' });
-    res.json({ token, user: { id: user.id, username: user.username, role: user.role, name: user.full_name } });
+    const token = jwt.sign({ id: user.id, login_name: user.login_name, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '24h' });
+    res.json({ token, user: { id: user.id, login_name: user.login_name, username: user.username, role: user.role } });
   });
 
   app.get("/api/auth/me", authenticate, (req: any, res) => {
     res.json(req.user);
+  });
+
+  app.post("/api/auth/change-password", authenticate, (req: any, res) => {
+    const { old_password, new_password } = req.body;
+    const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
+    if (!user || !bcrypt.compareSync(old_password, user.password)) {
+      return res.status(400).json({ error: "كلمة المرور القديمة غير صحيحة" });
+    }
+    const hashedPassword = bcrypt.hashSync(new_password, bcrypt.genSaltSync(10));
+    db.prepare("UPDATE users SET password = ? WHERE id = ?").run(hashedPassword, req.user.id);
+    res.json({ success: true });
+  });
+
+  // User Management APIs
+  app.get("/api/users", authenticate, authorize(['developer', 'admin']), (req, res) => {
+    try {
+      const users = db.prepare("SELECT id, login_name, username, role, created_at FROM users ORDER BY created_at DESC").all();
+      res.json(users);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/users", authenticate, authorize(['developer', 'admin']), (req, res) => {
+    const { login_name, username, password, role } = req.body;
+    try {
+      const hashedPassword = bcrypt.hashSync(password, bcrypt.genSaltSync(10));
+      const info = db.prepare("INSERT INTO users (login_name, username, password, role) VALUES (?, ?, ?, ?)").run(login_name, username, hashedPassword, role);
+      res.json({ id: info.lastInsertRowid });
+    } catch (e: any) {
+      res.status(400).json({ error: "اسم الدخول موجود مسبقاً أو بيانات غير صالحة" });
+    }
+  });
+
+  app.patch("/api/users/:id", authenticate, authorize(['developer', 'admin']), (req, res) => {
+    const { username, password, role } = req.body;
+    const id = req.params.id;
+    try {
+      const updates: string[] = [];
+      const params: any[] = [];
+      
+      if (username !== undefined) { updates.push("username = ?"); params.push(username); }
+      if (role !== undefined) { updates.push("role = ?"); params.push(role); }
+      if (password) { 
+        updates.push("password = ?"); 
+        params.push(bcrypt.hashSync(password, bcrypt.genSaltSync(10))); 
+      }
+
+      if (updates.length > 0) {
+        params.push(id);
+        db.prepare(`UPDATE users SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+      }
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/users/:id", authenticate, authorize(['developer', 'admin']), (req, res) => {
+    const id = req.params.id;
+    if (Number(id) === (req as any).user.id) {
+      return res.status(400).json({ error: "لا يمكن حذف حسابك الشخصي" });
+    }
+    db.prepare("DELETE FROM users WHERE id = ?").run(id);
+    res.json({ success: true });
   });
 
   // --- API Routes ---

@@ -2,15 +2,15 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 
 interface User {
   id: number;
+  login_name: string;
   username: string;
   role: 'developer' | 'admin' | 'editor' | 'data_collector' | 'searcher';
-  name: string;
 }
 
 interface AuthContextType {
   user: User | null;
   token: string | null;
-  login: (username: string, password: string) => Promise<void>;
+  login: (login_name: string, password: string) => Promise<void>;
   logout: () => void;
   isLoading: boolean;
 }
@@ -32,11 +32,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(false);
   }, []);
 
-  const login = async (username: string, password: string) => {
+  const login = async (login_name: string, password: string) => {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ login_name, password }),
     });
 
     if (!res.ok) {

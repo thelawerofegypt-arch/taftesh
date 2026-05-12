@@ -3,7 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Shield, Lock, User, AlertCircle, Loader2 } from 'lucide-react';
 
 export default function Login() {
-  const [username, setUsername] = useState('');
+  const [loginName, setLoginName] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -14,7 +14,7 @@ export default function Login() {
     setError('');
     setIsLoading(true);
     try {
-      await login(username, password);
+      await login(loginName, password);
     } catch (err: any) {
       setError(err.message || 'فشل تسجيل الدخول. يرجى التحقق من البيانات.');
     } finally {
@@ -43,7 +43,7 @@ export default function Login() {
             )}
 
             <div className="space-y-2">
-              <label className="block text-sm font-bold text-slate-700 mr-1">اسم المستخدم</label>
+              <label className="block text-sm font-bold text-slate-700 mr-1">اسم الدخول</label>
               <div className="relative group">
                 <div className="absolute inset-y-0 right-0 pr-4 flex items-center pointer-events-none text-slate-400 group-focus-within:text-primary transition-colors">
                   <User className="w-5 h-5" />
@@ -51,10 +51,10 @@ export default function Login() {
                 <input
                   type="text"
                   required
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  value={loginName}
+                  onChange={(e) => setLoginName(e.target.value)}
                   className="block w-full pr-12 pl-4 py-4 bg-slate-50 border-2 border-transparent rounded-2xl focus:bg-white focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all font-bold text-slate-700"
-                  placeholder="أدخل اسم المستخدم"
+                  placeholder="أدخل اسم الدخول"
                 />
               </div>
             </div>
