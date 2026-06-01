@@ -452,22 +452,32 @@ async function startServer() {
   // Prosecution Members API
   app.post("/api/system/clear-data", authenticate, authorize(['developer', 'admin']), (req, res) => {
     try {
+      db.exec("PRAGMA foreign_keys = OFF;");
+      const tables = [
+        'case_members', 'inspections', 'investigations', 'objections', 
+        'disciplinary_councils', 'audit_logs', 'reports_tracking', 'cases',
+        'promotions', 'transfers', 'members', 'prosecution_offices', 
+        'prosecution_members', 'prosecutions'
+      ];
+      const results: { table: string; success: boolean; error?: string }[] = [];
       const transaction = db.transaction(() => {
-        const tables = [
-          'case_members', 'inspections', 'investigations', 'objections', 
-          'disciplinary_councils', 'audit_logs', 'reports_tracking', 'cases',
-          'promotions', 'transfers', 'members', 'prosecution_offices', 
-          'prosecution_members', 'prosecutions'
-        ];
         tables.forEach(table => {
           try {
             db.prepare(`DELETE FROM ${table}`).run();
-          } catch(e) {}
+            results.push({ table, success: true });
+          } catch(e: any) {
+            results.push({ table, success: false, error: e.message });
+          }
         });
+        try {
+          db.prepare("DELETE FROM sqlite_sequence").run();
+        } catch (e) {}
       });
       transaction();
-      res.json({ success: true });
+      db.exec("PRAGMA foreign_keys = ON;");
+      res.json({ success: true, results });
     } catch (e: any) {
+      db.exec("PRAGMA foreign_keys = ON;");
       res.status(500).json({ error: e.message });
     }
   });
@@ -497,6 +507,7 @@ async function startServer() {
   app.post("/api/system/import-db", authenticate, authorize(['developer', 'admin']), (req, res) => {
     const data = req.body;
     try {
+      db.exec("PRAGMA foreign_keys = OFF;");
       const transaction = db.transaction(() => {
         // Order matters for foreign keys if enforced, but let's just clear and insert
         const tables = [
@@ -511,6 +522,9 @@ async function startServer() {
             db.prepare(`DELETE FROM ${table}`).run();
           } catch(e) {}
         });
+        try {
+          db.prepare("DELETE FROM sqlite_sequence").run();
+        } catch (e) {}
 
         for (const table of tables) {
           if (data[table] && Array.isArray(data[table]) && data[table].length > 0) {
@@ -525,8 +539,10 @@ async function startServer() {
         }
       });
       transaction();
+      db.exec("PRAGMA foreign_keys = ON;");
       res.json({ success: true });
     } catch (e: any) {
+      db.exec("PRAGMA foreign_keys = ON;");
       res.status(500).json({ error: e.message });
     }
   });
@@ -578,6 +594,23 @@ async function startServer() {
     const grade_order = gradeOrders[grade] || 99;
 
     try {
+      // Check if national_id already exists (even if inactive due to soft-delete)
+      const existing = db.prepare("SELECT id, is_active FROM prosecution_members WHERE national_id = ?").get(national_id);
+      if (existing) {
+        if (existing.is_active === 0) {
+          // Reactivate and update instead of throwing unique constraint error
+          db.prepare(`
+            UPDATE prosecution_members SET 
+              name = ?, grade = ?, grade_order = ?, seniority = ?, governorate = ?, 
+              police_station = ?, prosecution_office = ?, phone1 = ?, phone2 = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).run(name, grade, grade_order, seniority, governorate, police_station, prosecution_office, phone1, phone2, existing.id);
+          return res.json({ id: existing.id, reactivated: true });
+        } else {
+          return res.status(400).json({ error: "الرقم القومي مكرر لعضو نشط وموجود بالفعل بالنظام" });
+        }
+      }
+
       const info = db.prepare(`
         INSERT INTO prosecution_members (
           name, grade, grade_order, seniority, governorate, police_station, 
@@ -653,7 +686,14 @@ async function startServer() {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    const checkStmt = db.prepare("SELECT id FROM prosecution_members WHERE national_id = ?");
+    const checkStmt = db.prepare("SELECT id, is_active FROM prosecution_members WHERE national_id = ?");
+
+    const updateStmt = db.prepare(`
+      UPDATE prosecution_members SET 
+        name = ?, grade = ?, grade_order = ?, seniority = ?, governorate = ?, 
+        police_station = ?, prosecution_office = ?, phone1 = ?, phone2 = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `);
 
     const transaction = db.transaction((data) => {
       for (const m of data) {
@@ -663,13 +703,23 @@ async function startServer() {
             continue;
           }
 
+          const grade_order = gradeOrders[m.grade] || 99;
           const existing = checkStmt.get(String(m.national_id));
           if (existing) {
-            skipped++;
+            if (existing.is_active === 0) {
+              // Reactivate the soft-deleted/inactive member and update their properties!
+              updateStmt.run(
+                m.name, m.grade, grade_order, m.seniority, m.governorate, 
+                m.police_station, m.prosecution_office, m.phone1, m.phone2,
+                existing.id
+              );
+              inserted++;
+            } else {
+              skipped++;
+            }
             continue;
           }
 
-          const grade_order = gradeOrders[m.grade] || 99;
           insertStmt.run(
             m.name, m.grade, grade_order, m.seniority, m.governorate, 
             m.police_station, m.prosecution_office, String(m.national_id), 
@@ -776,9 +826,25 @@ async function startServer() {
 
   app.delete("/api/prosecution-members/:id", authenticate, authorize(['developer', 'admin']), (req, res) => {
     try {
-      // Soft delete: mark as inactive instead of removing
-      db.prepare("UPDATE prosecution_members SET is_active = 0 WHERE id = ?").run(req.params.id);
-      res.json({ success: true });
+      const id = req.params.id;
+      
+      // Check if reference exists in other tables to decide if we should hard or soft delete
+      const checkCaseMembers = db.prepare("SELECT COUNT(*) as count FROM case_members WHERE member_id = ?").get(id)?.count || 0;
+      const checkCases = db.prepare("SELECT COUNT(*) as count FROM cases WHERE examiner_id = ?").get(id)?.count || 0;
+      const checkInspections = db.prepare("SELECT COUNT(*) as count FROM inspections WHERE inspector_id = ?").get(id)?.count || 0;
+      const checkInvestigations = db.prepare("SELECT COUNT(*) as count FROM investigations WHERE investigator_id = ?").get(id)?.count || 0;
+      const checkObjections = db.prepare("SELECT COUNT(*) as count FROM objections WHERE member_id = ? OR committee_1_id = ? OR committee_2_id = ? OR committee_3_id = ?").get(id, id, id, id)?.count || 0;
+
+      const hasReferences = (checkCaseMembers + checkCases + checkInspections + checkInvestigations + checkObjections) > 0;
+
+      if (hasReferences) {
+        // Soft delete: mark as inactive instead of removing to preserve history
+        db.prepare("UPDATE prosecution_members SET is_active = 0 WHERE id = ?").run(id);
+      } else {
+        // Hard delete: remove completely since no cases or audits reference this member
+        db.prepare("DELETE FROM prosecution_members WHERE id = ?").run(id);
+      }
+      res.json({ success: true, deletedCompletely: !hasReferences });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
